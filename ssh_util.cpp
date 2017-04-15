@@ -69,5 +69,9 @@ void SshChannel::disconnect() {
         ssh_channel_send_eof(channel);
         ssh_channel_free(channel);
     }
-
 }
+
+int SshChannel::read(char *buf, int bufsize) {
+    return ssh_channel_read_nonblocking(channel, buf, bufsize, 0);
+}
+

@@ -65,5 +65,7 @@ public:
     }
 
     operator ssh_channel() { return channel; }
+
+    int read(char *buf, int bufsize);
 };
 

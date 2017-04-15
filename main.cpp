@@ -24,7 +24,17 @@ struct App {
     VteTerminal *terminal;
     SshSession session;
     SshChannel pty;
+    GIOChannel *session_channel;
 };
+
+gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    const int bufsize = 1024;
+    char buf[bufsize];
+    auto num_read = a.pty.read(buf, bufsize);
+    vte_terminal_feed(a.terminal, buf, num_read);
+    return TRUE;
+}
 
 void connect(App &app, const char *hostname, unsigned int port, const char *passphrase) {
     SshSession &s = app.session;
@@ -49,12 +59,15 @@ void connect(App &app, const char *hostname, unsigned int port, const char *pass
         return;
     }
     app.pty = s.openShell();
+    app.session_channel = g_io_channel_unix_new(ssh_get_fd(s));
+    g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
 
 void connect_cb(GtkMenuItem *, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
     connect(a, "192.168.1.149", 22, "nophrase");
 }
+
 
 void build_gui(App &app) {
     GtkWidget *hbox;
