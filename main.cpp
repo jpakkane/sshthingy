@@ -36,6 +36,13 @@ gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data)
     return TRUE;
 }
 
+gboolean key_pressed_cb(GtkWidget *widget, GdkEvent  *event, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    GdkEventKey *eventkey = reinterpret_cast<GdkEventKey*>(event);
+    a.pty.write(eventkey->string, eventkey->length); // FIXME, this is wrong
+    return TRUE;
+}
+
 void connect(App &app, const char *hostname, unsigned int port, const char *passphrase) {
     SshSession &s = app.session;
     ssh_options_set(s, SSH_OPTIONS_HOST, hostname);
@@ -104,6 +111,7 @@ void build_gui(App &app) {
     gtk_box_pack_end(GTK_BOX(hbox), scrollBar, FALSE, TRUE, 0);
     gtk_container_add(GTK_CONTAINER(app.mainWindow), vbox);
     g_signal_connect(app.mainWindow, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+    g_signal_connect(GTK_WIDGET(app.terminal), "key-press-event", G_CALLBACK(key_pressed_cb), &app);
 }
 
 int main(int argc, char **argv) {

@@ -61,11 +61,14 @@ public:
         disconnect();
         session = other.session;
         channel = other.channel;
+        other.session = nullptr;
+        other.channel = nullptr;
         return *this;
     }
 
     operator ssh_channel() { return channel; }
 
     int read(char *buf, int bufsize);
+    int write(char *buf, int bufsize);
 };
 

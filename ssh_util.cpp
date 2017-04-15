@@ -55,8 +55,7 @@ SshChannel SshSession::openShell() {
     return channel;
 }
 
-SshChannel::SshChannel(ssh_session session, ssh_channel channel) : session(session),
-        channel(channel) {
+SshChannel::SshChannel(ssh_session session, ssh_channel channel) : session(session), channel(channel) {
 }
 
 SshChannel::~SshChannel() {
@@ -75,3 +74,7 @@ int SshChannel::read(char *buf, int bufsize) {
     return ssh_channel_read_nonblocking(channel, buf, bufsize, 0);
 }
 
+
+int SshChannel::write(char *buf, int bufsize) {
+    return ssh_channel_write(channel, buf, bufsize);
+}
