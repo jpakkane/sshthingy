@@ -23,9 +23,11 @@ struct App {
     GtkWidget *mainWindow;
     VteTerminal *terminal;
     SshSession session;
+    SshChannel pty;
 };
 
-void connect(SshSession &s, const char *hostname, unsigned int port, const char *passphrase) {
+void connect(App &app, const char *hostname, unsigned int port, const char *passphrase) {
+    SshSession &s = app.session;
     ssh_options_set(s, SSH_OPTIONS_HOST, hostname);
     ssh_options_set(s, SSH_OPTIONS_PORT, &port);
     auto rc = ssh_connect(s);
@@ -46,11 +48,12 @@ void connect(SshSession &s, const char *hostname, unsigned int port, const char 
         gtk_main_quit();
         return;
     }
+    app.pty = s.openShell();
 }
 
 void connect_cb(GtkMenuItem *, gpointer data) {
-    App *a = reinterpret_cast<App*>(data);
-    connect(a->session, "192.168.1.149", 22, "nophrase");
+    App &a = *reinterpret_cast<App*>(data);
+    connect(a, "192.168.1.149", 22, "nophrase");
 }
 
 void build_gui(App &app) {
