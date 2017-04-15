@@ -4,6 +4,6 @@ project('ssh thingy', 'cpp',
 ssh_dep = dependency('libssh')
 vte_dep = dependency('vte-2.91')
 
-executable('sshprog', 'main.cpp',
+executable('sshprog', 'main.cpp', 'ssh_util.cpp',
   dependencies : [vte_dep, ssh_dep])
 
