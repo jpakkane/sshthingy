@@ -69,6 +69,14 @@ SftpSession SshSession::open_sftp_session() {
     return s;
 }
 
+SftpDir SftpSession::open_directory(const char *dirpath) {
+    SftpDir fdir = sftp_opendir(ftp_session, dirpath);
+    if(fdir == nullptr) {
+        printf("Could not open sftp directory: %s\n", ssh_get_error(session));
+    }
+    return fdir;
+}
+
 SshChannel::SshChannel(ssh_session session, ssh_channel channel) : session(session), channel(channel) {
 }
 

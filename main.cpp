@@ -20,6 +20,20 @@
 #include<vte/vte.h>
 #include<gtk/gtk.h>
 
+enum SftpViewColumns {
+    NAME_COLUMN,
+    N_COLUMNS,
+};
+
+struct SftpWindow {
+    GtkBuilder *builder;
+    GtkWindow *sftp_window;
+    GtkTreeView *file_view;
+    GtkListStore *file_list;
+    GtkProgressBar *progress;
+    std::string dirname;
+};
+
 struct App {
     GtkWidget *mainWindow;
     VteTerminal *terminal;
@@ -29,8 +43,9 @@ struct App {
 
     GIOChannel *session_channel;
     GtkBuilder *connectionBuilder;
-    GtkBuilder *sftpBuilder;
+    SftpWindow sftp_win;
 };
+
 
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
@@ -81,9 +96,32 @@ void connect(App &app, const char *hostname, const char *username, const char *p
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
 
-void open_sftp(App &a) {
-    a.sftpBuilder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
+void load_sftp_dir_data(App &a, const char *newdir) {
+    SftpWindow &s = a.sftp_win;
+    s.dirname = newdir;
+    gtk_list_store_clear(s.file_list);
+    SftpDir dir = a.sftp.open_directory(newdir);
+    SftpAttributes attribute;
+    GtkTreeIter iter;
+    while((attribute = sftp_readdir(a.sftp, dir))) {
+        gtk_list_store_append(s.file_list, &iter);
+        gtk_list_store_set(s.file_list, &iter,
+                            NAME_COLUMN, attribute->name,
+                           -1);
+    }
+}
 
+void open_sftp(App &a) {
+    a.sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
+    a.sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(a.sftp_win.builder, "sftp_window"));
+    a.sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(a.sftp_win.builder, "fileview"));
+    a.sftp_win.file_list = gtk_list_store_new(1, G_TYPE_STRING);
+    a.sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(a.sftp_win.builder, "transfer_progress"));
+    gtk_tree_view_set_model(a.sftp_win.file_view, GTK_TREE_MODEL(a.sftp_win.file_list));
+    gtk_tree_view_append_column(a.sftp_win.file_view,
+                gtk_tree_view_column_new_with_attributes("Filename",
+                        gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
+    gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
 }
 
 void open_connection(GtkMenuItem *, gpointer data) {
@@ -98,6 +136,7 @@ void open_connection(GtkMenuItem *, gpointer data) {
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
     connect(a, host_str, username_str, password_str, active_mode);
     open_sftp(a);
+    load_sftp_dir_data(a, ".");
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
     a.connectionBuilder = nullptr;

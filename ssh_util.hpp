@@ -22,6 +22,7 @@
 
 class SshChannel;
 class SftpSession;
+class SftpDir;
 
 class SshSession final {
 private:
@@ -102,5 +103,57 @@ public:
         return *this;
     }
 
+    SftpDir open_directory(const char *dirpath);
+
     operator sftp_session() { return ftp_session; }
+};
+
+class SftpDir final {
+private:
+    sftp_dir dir;
+
+    void disconnect() { if(dir) { sftp_closedir(dir); dir=nullptr; } }
+
+public:
+
+    SftpDir() : dir(nullptr) {}
+    SftpDir(sftp_dir dir) : dir(dir) {}
+    ~SftpDir() { disconnect(); }
+
+    SftpDir(const SftpDir &other) = delete;
+    SftpDir& operator=(const SftpDir &other) = delete;
+
+    SftpDir(SftpDir &&other) = default;
+    SftpDir& operator=(SftpDir &&other) {
+        disconnect();
+        dir = other.dir;
+        other.dir = nullptr;
+        return *this;
+    }
+
+    operator sftp_dir() { return dir; }
+};
+
+class SftpAttributes final {
+private:
+    sftp_attributes attributes;
+
+public:
+
+    SftpAttributes() : attributes(nullptr) {}
+    SftpAttributes(sftp_attributes attributes) : attributes(attributes) {}
+    ~SftpAttributes() {}
+
+    SftpAttributes(const SftpAttributes &other) = delete;
+    SftpAttributes& operator=(const SftpAttributes &other) = delete;
+
+    SftpAttributes(SftpAttributes &&other) = default;
+    SftpAttributes& operator=(SftpAttributes &&other) {
+        attributes = other.attributes;
+        other.attributes = nullptr;
+        return *this;
+    }
+
+    operator sftp_attributes() { return attributes; }
+    sftp_attributes operator ->() { return attributes; }
 };
