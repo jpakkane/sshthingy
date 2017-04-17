@@ -25,8 +25,11 @@ struct App {
     VteTerminal *terminal;
     SshSession session;
     SshChannel pty;
+    SftpSession sftp;
+
     GIOChannel *session_channel;
     GtkBuilder *connectionBuilder;
+    GtkBuilder *sftpBuilder;
 };
 
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
@@ -72,9 +75,15 @@ void connect(App &app, const char *hostname, const char *username, const char *p
         gtk_main_quit();
         return;
     }
-    app.pty = s.openShell();
+    app.pty = s.open_shell();
+    app.sftp = s.open_sftp_session();
     app.session_channel = g_io_channel_unix_new(ssh_get_fd(s));
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
+}
+
+void open_sftp(App &a) {
+    a.sftpBuilder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
+
 }
 
 void open_connection(GtkMenuItem *, gpointer data) {
@@ -88,6 +97,7 @@ void open_connection(GtkMenuItem *, gpointer data) {
     const char *password_str = gtk_entry_get_text(GTK_ENTRY(password));
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
     connect(a, host_str, username_str, password_str, active_mode);
+    open_sftp(a);
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
     a.connectionBuilder = nullptr;

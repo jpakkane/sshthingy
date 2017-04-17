@@ -26,7 +26,7 @@ SshSession::~SshSession() {
     ssh_free(session);
 }
 
-SshChannel SshSession::openShell() {
+SshChannel SshSession::open_shell() {
     SshChannel channel(session, ssh_channel_new(session));
     if(channel == nullptr) {
         printf("Could not open channel: %s\n", ssh_get_error(session));
@@ -34,25 +34,39 @@ SshChannel SshSession::openShell() {
     }
     auto rc = ssh_channel_open_session(channel);
     if(rc != SSH_OK) {
-        printf("Could not open session: %s", ssh_get_error(session));
+        printf("Could not open session: %s\n", ssh_get_error(session));
         return channel;
     }
     rc = ssh_channel_request_pty(channel);
     if(rc != SSH_OK) {
-        printf("Could not get pty: %s", ssh_get_error(session));
+        printf("Could not get pty: %s\n", ssh_get_error(session));
         return channel;
     }
     rc = ssh_channel_change_pty_size(channel, 80, 25);
     if(rc != SSH_OK) {
-        printf("Could not get change pty size: %s", ssh_get_error(session));
+        printf("Could not get change pty size: %s\n", ssh_get_error(session));
         return channel;
     }
     rc = ssh_channel_request_shell(channel);
     if(rc != SSH_OK) {
-        printf("Could not get create shell: %s", ssh_get_error(session));
+        printf("Could not get create shell: %s\n", ssh_get_error(session));
         return channel;
     }
     return channel;
+}
+
+SftpSession SshSession::open_sftp_session() {
+    SftpSession s(session, sftp_new(session));
+    if(s == nullptr) {
+        printf("Could not open sftp connection: %s\n", ssh_get_error(session));
+        return s;
+    }
+    auto rc = sftp_init(s);
+    if(rc != SSH_OK) {
+        printf("Could not init sftp connection: %s\n", ssh_get_error(session));
+        return s;
+    }
+    return s;
 }
 
 SshChannel::SshChannel(ssh_session session, ssh_channel channel) : session(session), channel(channel) {
@@ -77,4 +91,18 @@ int SshChannel::read(char *buf, int bufsize) {
 
 int SshChannel::write(char *buf, int bufsize) {
     return ssh_channel_write(channel, buf, bufsize);
+}
+
+SftpSession::SftpSession(ssh_session session, sftp_session ftp_session) : session(session), ftp_session(ftp_session) {
+}
+
+SftpSession::~SftpSession() {
+    disconnect();
+}
+
+void SftpSession::disconnect() {
+    if(ftp_session) {
+        sftp_free(ftp_session);
+        ftp_session = nullptr;
+    }
 }
