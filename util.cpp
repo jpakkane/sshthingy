@@ -23,3 +23,12 @@
 std::string data_file_name(const char *basename) {
     return std::string("../sshthingy/") + basename;
 }
+
+std::string split_filename(const char *fname) {
+    std::string f(fname);
+    auto slash_loc = f.rfind('/');
+    if(slash_loc == std::string::npos) {
+        return f;
+    }
+    return f.substr(slash_loc+1, std::string::npos);
+}

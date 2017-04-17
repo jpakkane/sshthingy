@@ -20,3 +20,4 @@
 #include<string>
 
 std::string data_file_name(const char *basename);
+std::string split_filename(const char *fname);
