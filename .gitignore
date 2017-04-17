@@ -3,6 +3,7 @@
 .cproject
 .settings
 /build
+/*.pro*
 
 *~
 

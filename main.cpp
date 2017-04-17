@@ -16,6 +16,7 @@
  */
 
 #include<ssh_util.hpp>
+#include<util.hpp>
 #include<vte/vte.h>
 #include<gtk/gtk.h>
 
@@ -25,6 +26,7 @@ struct App {
     SshSession session;
     SshChannel pty;
     GIOChannel *session_channel;
+    GtkBuilder *connectionBuilder;
 };
 
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
@@ -43,7 +45,8 @@ gboolean key_pressed_cb(GtkWidget *widget, GdkEvent  *event, gpointer data) {
     return TRUE;
 }
 
-void connect(App &app, const char *hostname, unsigned int port, const char *passphrase) {
+void connect(App &app, const char *hostname, const char *username, const char *passphrase, int conn_type) {
+    const unsigned int port=22;
     SshSession &s = app.session;
     ssh_options_set(s, SSH_OPTIONS_HOST, hostname);
     ssh_options_set(s, SSH_OPTIONS_PORT, &port);
@@ -59,7 +62,11 @@ void connect(App &app, const char *hostname, unsigned int port, const char *pass
         gtk_main_quit();
         return;
     }
-    rc = ssh_userauth_autopubkey(s, passphrase);
+    if(conn_type == 0) {
+        rc = ssh_userauth_password(s, username, passphrase);
+    } else {
+        rc = ssh_userauth_autopubkey(s, passphrase);
+    }
     if(rc != SSH_OK) {
         printf("Could not connect: %s\n", ssh_get_error(s));
         gtk_main_quit();
@@ -70,9 +77,37 @@ void connect(App &app, const char *hostname, unsigned int port, const char *pass
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
 
-void connect_cb(GtkMenuItem *, gpointer data) {
+void open_connection(GtkMenuItem *, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
-    connect(a, "192.168.1.149", 22, "nophrase");
+    GtkWidget *host = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "host_entry"));
+    GtkWidget *password = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "password_entry"));
+    GtkWidget *username = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "username_entry"));
+    GtkWidget *authentication = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "authentication_combo"));
+    const char *host_str = gtk_entry_get_text(GTK_ENTRY(host));
+    const char *username_str = gtk_entry_get_text(GTK_ENTRY(username));
+    const char *password_str = gtk_entry_get_text(GTK_ENTRY(password));
+    gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
+    connect(a, host_str, username_str, password_str, active_mode);
+    gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
+    g_object_unref(G_OBJECT(a.connectionBuilder));
+    a.connectionBuilder = nullptr;
+}
+
+void connect_cancelled(GtkMenuItem *, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
+    g_object_unref(G_OBJECT(a.connectionBuilder));
+    a.connectionBuilder = nullptr;
+}
+
+void launch_connection_dialog(GtkMenuItem *, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    a.connectionBuilder = gtk_builder_new_from_file(data_file_name("connectiondialog.glade").c_str());
+    auto connectionWindow = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window"));
+    gtk_entry_set_text(GTK_ENTRY(gtk_builder_get_object(a.connectionBuilder, "username_entry")), g_get_user_name());
+    g_signal_connect(gtk_builder_get_object(a.connectionBuilder, "connect_button"), "clicked", G_CALLBACK(open_connection), &a);
+    g_signal_connect(gtk_builder_get_object(a.connectionBuilder, "cancel_button"), "clicked", G_CALLBACK(connect_cancelled), &a);
+    gtk_widget_show_all(connectionWindow);
 }
 
 
@@ -95,7 +130,7 @@ void build_gui(App &app) {
     auto connect = gtk_menu_item_new_with_label("Connect");
     auto quit = gtk_menu_item_new_with_label("Quit");
     gtk_menu_shell_append(GTK_MENU_SHELL(filemenu), connect);
-    g_signal_connect(connect, "activate", G_CALLBACK(connect_cb), &app);
+    g_signal_connect(connect, "activate", G_CALLBACK(launch_connection_dialog), &app);
     gtk_menu_shell_append(GTK_MENU_SHELL(filemenu), quit);
     g_signal_connect(quit, "activate", G_CALLBACK(gtk_main_quit), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menubar), fmenu);
