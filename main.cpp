@@ -22,7 +22,7 @@
 #include<glib/gstdio.h>
 #include<fcntl.h>
 
-static const int SFTP_BUF_SIZE = 16*1024;
+static const int SFTP_BUF_SIZE = 4*1024;
 
 enum SftpViewColumns {
     NAME_COLUMN,
@@ -97,7 +97,9 @@ cleanup:
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
     feed_terminal(a);
-    feed_sftp(a);
+    if(a.sftp_win.downloading) {
+        feed_sftp(a);
+    }
     return TRUE;
 }
 
@@ -145,6 +147,7 @@ gboolean async_uploader(gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
     auto bytes_read = read(a.sftp_win.local_file, a.sftp_win.buf, SFTP_BUF_SIZE);
     ssize_t bytes_written = 0;
+    feed_terminal(a); // Otherwise libssh drains the socket and glib does not see the events.
     if(bytes_read < 0) {
         printf("Could not read from file.\n");
         goto cleanup;
@@ -261,8 +264,10 @@ void open_connection(GtkMenuItem *, gpointer data) {
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
     connect(a, host_str, username_str, password_str, active_mode);
     open_sftp(a);
+    // All hacks here.
     a.sftp_win.dirname = ".";
     upload_file(a, "tempfile.mp4");
+    feed_terminal(a);
     load_sftp_dir_data(a, ".");
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
