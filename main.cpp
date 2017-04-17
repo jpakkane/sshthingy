@@ -19,11 +19,16 @@
 #include<util.hpp>
 #include<vte/vte.h>
 #include<gtk/gtk.h>
+#include<glib/gstdio.h>
+#include<fcntl.h>
+
+static const int SFTP_BUF_SIZE = 16*1024*1024;
 
 enum SftpViewColumns {
     NAME_COLUMN,
     N_COLUMNS,
 };
+
 
 struct SftpWindow {
     GtkBuilder *builder;
@@ -31,7 +36,11 @@ struct SftpWindow {
     GtkTreeView *file_view;
     GtkListStore *file_list;
     GtkProgressBar *progress;
+    SftpFile remote_file;
+    int async_request;
     std::string dirname;
+    int local_file;
+    char buf[SFTP_BUF_SIZE];
 };
 
 struct App {
@@ -46,13 +55,48 @@ struct App {
     SftpWindow sftp_win;
 };
 
-
-gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
-    App &a = *reinterpret_cast<App*>(data);
+void feed_terminal(App &a) {
     const int bufsize = 1024;
     char buf[bufsize];
     auto num_read = a.pty.read(buf, bufsize);
     vte_terminal_feed(a.terminal, buf, num_read);
+}
+
+void feed_sftp(App &a) {
+    ssize_t bytes_written, bytes_read;
+    if(a.sftp_win.remote_file == nullptr) {
+        return;
+    }
+    // FIXME, can only read from remote.
+    bytes_read = sftp_async_read(a.sftp_win.remote_file, a.sftp_win.buf, SFTP_BUF_SIZE, a.sftp_win.async_request);
+    if(bytes_read == SSH_AGAIN) {
+        return;
+    }
+    if(bytes_read == 0) {
+        goto cleanup;
+    }
+    if(bytes_read < 0) {
+        printf("Error reading file: %s\n", ssh_get_error(a.session));
+        goto cleanup;
+    }
+    bytes_written = write(a.sftp_win.local_file, a.sftp_win.buf, bytes_read);
+    if(bytes_written != bytes_read) {
+        printf("Could not write to file.");
+        goto cleanup;
+    }
+    a.sftp_win.async_request = sftp_async_read_begin(a.sftp_win.remote_file, SFTP_BUF_SIZE);
+    return; // There is more data to transfer.
+
+cleanup:
+    close(a.sftp_win.local_file);
+    a.sftp_win.remote_file = SftpFile();
+}
+
+
+gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    feed_terminal(a);
+    feed_sftp(a);
     return TRUE;
 }
 
@@ -111,16 +155,49 @@ void load_sftp_dir_data(App &a, const char *newdir) {
     }
 }
 
+void sftp_row_activated(GtkTreeView       *tree_view,
+                        GtkTreePath       *path,
+                        GtkTreeViewColumn *column,
+                        gpointer          data) {
+    App &a = *reinterpret_cast<App*>(data);
+    // FIXME assumes that the clicked thing is a file name.
+    GtkTreeIter iter;
+    gtk_tree_model_get_iter(GTK_TREE_MODEL(a.sftp_win.file_list), &iter, path);
+    GValue val = G_VALUE_INIT;
+    gtk_tree_model_get_value(GTK_TREE_MODEL(a.sftp_win.file_list), &iter, NAME_COLUMN, &val);
+    g_assert(G_VALUE_HOLDS_STRING(&val));
+    const char *fname = g_value_get_string(&val);
+    std::string full_remote_path = fname; // FIXME, path
+    std::string full_local_path = fname; // FIXME, use file dialog.
+    g_value_unset(&val);
+    auto remote_file = sftp_open(a.sftp, full_remote_path.c_str(), O_RDONLY, 0);
+    if(remote_file == nullptr) {
+        printf("Could not open file: %s\n", ssh_get_error(a.session));
+        return;
+    }
+    sftp_file_set_nonblocking(remote_file);
+    a.sftp_win.local_file = g_open(full_local_path.c_str(), O_WRONLY | O_CREAT, S_IRWXU);
+    if(a.sftp_win.local_file < 0) {
+        printf("Could not open local file.");
+        return;
+    }
+    int async_request = sftp_async_read_begin(remote_file, SFTP_BUF_SIZE);
+    a.sftp_win.remote_file = std::move(remote_file);
+    a.sftp_win.async_request = async_request;
+}
+
 void open_sftp(App &a) {
     a.sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
     a.sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(a.sftp_win.builder, "sftp_window"));
     a.sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(a.sftp_win.builder, "fileview"));
     a.sftp_win.file_list = gtk_list_store_new(1, G_TYPE_STRING);
     a.sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(a.sftp_win.builder, "transfer_progress"));
+
     gtk_tree_view_set_model(a.sftp_win.file_view, GTK_TREE_MODEL(a.sftp_win.file_list));
     gtk_tree_view_append_column(a.sftp_win.file_view,
                 gtk_tree_view_column_new_with_attributes("Filename",
                         gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
+    g_signal_connect(GTK_WIDGET(a.sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated),& a);
     gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
 }
 
@@ -199,12 +276,13 @@ void build_gui(App &app) {
 }
 
 int main(int argc, char **argv) {
-    struct App app;
+    struct App *app = new App();
 
     gtk_init(&argc, &argv);
-    build_gui(app);
+    build_gui(*app);
 
-    gtk_widget_show_all(app.mainWindow);
+    gtk_widget_show_all(app->mainWindow);
     gtk_main();
+    delete app;
     return 0;
 }

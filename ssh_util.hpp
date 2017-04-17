@@ -134,6 +134,34 @@ public:
     operator sftp_dir() { return dir; }
 };
 
+
+class SftpFile final {
+private:
+    sftp_file file;
+
+    void disconnect() { if(file) { sftp_close(file); file=nullptr; } }
+
+public:
+
+    SftpFile() : file(nullptr) {}
+    SftpFile(sftp_file file) : file(file) {}
+    ~SftpFile() { disconnect(); }
+
+    SftpFile(const SftpFile &other) = delete;
+    SftpFile& operator=(const SftpFile &other) = delete;
+
+    SftpFile(SftpFile &&other) = default;
+    SftpFile& operator=(SftpFile &&other) {
+        disconnect();
+        file = other.file;
+        other.file = nullptr;
+        return *this;
+    }
+
+    operator sftp_file() { return file; }
+};
+
+
 class SftpAttributes final {
 private:
     sftp_attributes attributes;
