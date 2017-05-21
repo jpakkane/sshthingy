@@ -52,6 +52,9 @@ enum PortForwardingColumns {
 };
 
 struct PortForwardings {
+    GtkBuilder *forwardingBuilder;
+    GtkBuilder *newBuilder;
+
     GtkWindow *forwardWindow;
     GtkWindow *createWindow;
 
@@ -164,7 +167,7 @@ void connect(App &app, const char *hostname, const char *username, const char *p
         return;
     }
     app.pty = s.open_shell();
-    app.sftp = s.open_sftp_session();
+    //app.sftp = s.open_sftp_session();
     app.session_channel = g_io_channel_unix_new(ssh_get_fd(s));
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
@@ -275,7 +278,7 @@ void open_sftp(App &a) {
                 gtk_tree_view_column_new_with_attributes("Filename",
                         gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
     g_signal_connect(GTK_WIDGET(a.sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated),& a);
-    gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
+    //gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
 }
 
 void open_connection(GtkMenuItem *, gpointer data) {
@@ -315,24 +318,88 @@ void launch_connection_dialog(GtkMenuItem *, gpointer data) {
     gtk_widget_show_all(connectionWindow);
 }
 
+void open_sftp_window(GtkMenuItem *, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+}
+
+void open_forwardings_window(GtkMenuItem *, gpointer data) {
+    App &a = *reinterpret_cast<App*>(data);
+    gtk_widget_show_all(GTK_WIDGET(a.ports.forwardWindow));
+}
+
+void open_new_forwarding(GtkMenuItem*, gpointer data) {
+    PortForwardings &pf = *reinterpret_cast<PortForwardings*>(data);
+    gtk_widget_show_all(GTK_WIDGET(pf.createWindow));
+}
+
+void delete_forwarding(GtkMenuItem*, gpointer data) {
+    PortForwardings &pf = *reinterpret_cast<PortForwardings*>(data);
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(pf.forwardings);
+    GtkTreeIter iter;
+    GtkTreeModel *m = nullptr;
+    if(gtk_tree_selection_get_selected(sel, &m, &iter)) {
+        auto path = gtk_tree_model_get_path(m, &iter);
+        int row = gtk_tree_path_get_indices(path)[0];
+        // FIXME delete ongoing connections for this rule.
+        gtk_tree_path_free(path);
+        gtk_list_store_remove(pf.forward_list, &iter);
+    }
+
+}
+
+void create_new_forwarding(GtkMenuItem*, gpointer data) {
+    PortForwardings &pf = *reinterpret_cast<PortForwardings*>(data);
+    GtkTreeIter iter;
+    gtk_widget_hide(GTK_WIDGET(pf.createWindow));
+    int local_port = gtk_spin_button_get_value_as_int(pf.local_spin);
+    int remote_port = gtk_spin_button_get_value_as_int(pf.remote_spin);
+    const gchar *host = gtk_entry_get_text(pf.host_entry);
+    if(host == nullptr || host[0] == '\0') {
+        return;
+    }
+    // FIXME, check that there is not already a forwarding for the
+    // given port.
+    gtk_list_store_append(pf.forward_list, &iter);
+    gtk_list_store_set(pf.forward_list, &iter,
+                       HOST_COLUMN, host,
+                       LOCAL_PORT_COLUMN, local_port,
+                       REMOTE_PORT_COLUMN, remote_port,
+                      -1);
+}
+
+void close_new_fw_window(GtkMenuItem*, gpointer data) {
+    PortForwardings &pf = *reinterpret_cast<PortForwardings*>(data);
+    gtk_widget_hide(GTK_WIDGET(pf.createWindow));
+}
+
 void build_port_gui(PortForwardings &pf) {
     GtkBuilder *portBuilder = gtk_builder_new_from_file(data_file_name("forwardings.glade").c_str());
-    GtkBuilder *portWinBuilder = gtk_builder_new_from_file(data_file_name("createforwarding.glade").c_str());
+    GtkBuilder *newPortBuilder = gtk_builder_new_from_file(data_file_name("createforwarding.glade").c_str());
+
+    pf.forwardingBuilder = portBuilder;
+    pf.newBuilder = newPortBuilder;
 
     pf.forwardWindow = GTK_WINDOW(gtk_builder_get_object(portBuilder, "forwarding_window"));
+    pf.createWindow = GTK_WINDOW(gtk_builder_get_object(newPortBuilder, "create_forwarding_window"));
     pf.forwardings = GTK_TREE_VIEW(gtk_builder_get_object(portBuilder, "forwards_view"));
     pf.forward_list = gtk_list_store_new(PF_N_COLUMNS, G_TYPE_STRING, G_TYPE_INT, G_TYPE_INT);
 
     pf.create_button = GTK_BUTTON(gtk_builder_get_object(portBuilder, "create_button"));
-    pf.cancel_button = GTK_BUTTON(gtk_builder_get_object(portBuilder, "cancel_button"));
+    pf.delete_button = GTK_BUTTON(gtk_builder_get_object(portBuilder, "delete_button"));
 
-    pf.host_entry = GTK_ENTRY(gtk_builder_get_object(portWinBuilder, "host_entry"));
-    pf.remote_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(portWinBuilder, "remote_spin"));
-    pf.local_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(portWinBuilder, "local_spin"));
-    pf.ok_button = GTK_BUTTON(gtk_builder_get_object(portWinBuilder, "ok_button"));
-    pf.cancel_button = GTK_BUTTON(gtk_builder_get_object(portWinBuilder, "cancel_button"));
+    pf.host_entry = GTK_ENTRY(gtk_builder_get_object(newPortBuilder, "host_entry"));
+    pf.remote_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(newPortBuilder, "remote_spin"));
+    pf.local_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(newPortBuilder, "local_spin"));
+    pf.ok_button = GTK_BUTTON(gtk_builder_get_object(newPortBuilder, "ok_button"));
+    pf.cancel_button = GTK_BUTTON(gtk_builder_get_object(newPortBuilder, "cancel_button"));
+
+    g_signal_connect(G_OBJECT(pf.create_button), "clicked", G_CALLBACK(open_new_forwarding), &pf);
+    g_signal_connect(G_OBJECT(pf.delete_button), "clicked", G_CALLBACK(delete_forwarding), &pf);
+    g_signal_connect(G_OBJECT(pf.ok_button), "clicked", G_CALLBACK(create_new_forwarding), &pf);
+    g_signal_connect(G_OBJECT(pf.cancel_button), "clicked", G_CALLBACK(close_new_fw_window), &pf);
 
     // Connect view to model.
+    gtk_tree_view_set_headers_visible(pf.forwardings, TRUE);
     gtk_tree_view_set_model(pf.forwardings, GTK_TREE_MODEL(pf.forward_list));
     gtk_tree_view_append_column(pf.forwardings,
                 gtk_tree_view_column_new_with_attributes("Hostname",
@@ -343,9 +410,7 @@ void build_port_gui(PortForwardings &pf) {
     gtk_tree_view_append_column(pf.forwardings,
                 gtk_tree_view_column_new_with_attributes("Remote port",
                 gtk_cell_renderer_text_new(), "text", REMOTE_PORT_COLUMN, nullptr));
-
-    g_object_unref(G_OBJECT(portWinBuilder));
-    g_object_unref(G_OBJECT(portBuilder));
+    gtk_tree_selection_set_mode(gtk_tree_view_get_selection(pf.forwardings), GTK_SELECTION_SINGLE);
 }
 
 void build_gui(App &app) {
@@ -354,6 +419,7 @@ void build_gui(App &app) {
     GtkWidget *scrollBar;
     GtkWidget *menubar;
     GtkWidget *filemenu;
+    GtkWidget *actionmenu;
 
     app.mainWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     build_port_gui(app.ports);
@@ -372,6 +438,18 @@ void build_gui(App &app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(filemenu), quit);
     g_signal_connect(quit, "activate", G_CALLBACK(gtk_main_quit), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menubar), fmenu);
+
+    actionmenu = gtk_menu_new();
+    GtkWidget *amenu = gtk_menu_item_new_with_label("Actions");
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(amenu), actionmenu);
+    auto opensftp = gtk_menu_item_new_with_label("Open file transfer");
+    auto openforward = gtk_menu_item_new_with_label("Open port forwardings");
+    gtk_menu_shell_append(GTK_MENU_SHELL(actionmenu), opensftp);
+    gtk_menu_shell_append(GTK_MENU_SHELL(actionmenu), openforward);
+    g_signal_connect(opensftp, "activate", G_CALLBACK(open_sftp_window), &app);
+    g_signal_connect(openforward, "activate", G_CALLBACK(open_forwardings_window), &app);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menubar), amenu);
+
     gtk_box_pack_start(GTK_BOX(vbox), menubar, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, TRUE, 0);
 
