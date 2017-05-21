@@ -44,12 +44,38 @@ struct SftpWindow {
     bool downloading;
 };
 
+enum PortForwardingColumns {
+    HOST_COLUMN,
+    LOCAL_PORT_COLUMN,
+    REMOTE_PORT_COLUMN,
+    PF_N_COLUMNS,
+};
+
+struct PortForwardings {
+    GtkWindow *forwardWindow;
+    GtkWindow *createWindow;
+
+    GtkTreeView *forwardings;
+    GtkListStore *forward_list;
+
+    GtkButton *create_button;
+    GtkButton *delete_button;
+
+    GtkSpinButton *local_spin;
+    GtkSpinButton *remote_spin;
+    GtkEntry *host_entry;
+    GtkButton *ok_button;
+    GtkButton *cancel_button;
+
+};
+
 struct App {
     GtkWidget *mainWindow;
     VteTerminal *terminal;
     SshSession session;
     SshChannel pty;
     SftpSession sftp;
+    PortForwardings ports;
 
     GIOChannel *session_channel;
     GtkBuilder *connectionBuilder;
@@ -241,7 +267,7 @@ void open_sftp(App &a) {
     a.sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
     a.sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(a.sftp_win.builder, "sftp_window"));
     a.sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(a.sftp_win.builder, "fileview"));
-    a.sftp_win.file_list = gtk_list_store_new(1, G_TYPE_STRING);
+    a.sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_STRING);
     a.sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(a.sftp_win.builder, "transfer_progress"));
 
     gtk_tree_view_set_model(a.sftp_win.file_view, GTK_TREE_MODEL(a.sftp_win.file_list));
@@ -263,12 +289,10 @@ void open_connection(GtkMenuItem *, gpointer data) {
     const char *password_str = gtk_entry_get_text(GTK_ENTRY(password));
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
     connect(a, host_str, username_str, password_str, active_mode);
-    open_sftp(a);
     // All hacks here.
+    open_sftp(a);
     a.sftp_win.dirname = ".";
-    upload_file(a, "tempfile.mp4");
     feed_terminal(a);
-    load_sftp_dir_data(a, ".");
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
     a.connectionBuilder = nullptr;
@@ -291,6 +315,38 @@ void launch_connection_dialog(GtkMenuItem *, gpointer data) {
     gtk_widget_show_all(connectionWindow);
 }
 
+void build_port_gui(PortForwardings &pf) {
+    GtkBuilder *portBuilder = gtk_builder_new_from_file(data_file_name("forwardings.glade").c_str());
+    GtkBuilder *portWinBuilder = gtk_builder_new_from_file(data_file_name("createforwarding.glade").c_str());
+
+    pf.forwardWindow = GTK_WINDOW(gtk_builder_get_object(portBuilder, "forwarding_window"));
+    pf.forwardings = GTK_TREE_VIEW(gtk_builder_get_object(portBuilder, "forwards_view"));
+    pf.forward_list = gtk_list_store_new(PF_N_COLUMNS, G_TYPE_STRING, G_TYPE_INT, G_TYPE_INT);
+
+    pf.create_button = GTK_BUTTON(gtk_builder_get_object(portBuilder, "create_button"));
+    pf.cancel_button = GTK_BUTTON(gtk_builder_get_object(portBuilder, "cancel_button"));
+
+    pf.host_entry = GTK_ENTRY(gtk_builder_get_object(portWinBuilder, "host_entry"));
+    pf.remote_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(portWinBuilder, "remote_spin"));
+    pf.local_spin = GTK_SPIN_BUTTON(gtk_builder_get_object(portWinBuilder, "local_spin"));
+    pf.ok_button = GTK_BUTTON(gtk_builder_get_object(portWinBuilder, "ok_button"));
+    pf.cancel_button = GTK_BUTTON(gtk_builder_get_object(portWinBuilder, "cancel_button"));
+
+    // Connect view to model.
+    gtk_tree_view_set_model(pf.forwardings, GTK_TREE_MODEL(pf.forward_list));
+    gtk_tree_view_append_column(pf.forwardings,
+                gtk_tree_view_column_new_with_attributes("Hostname",
+                gtk_cell_renderer_text_new(), "text", HOST_COLUMN, nullptr));
+    gtk_tree_view_append_column(pf.forwardings,
+                gtk_tree_view_column_new_with_attributes("Local port",
+                gtk_cell_renderer_text_new(), "text", LOCAL_PORT_COLUMN, nullptr));
+    gtk_tree_view_append_column(pf.forwardings,
+                gtk_tree_view_column_new_with_attributes("Remote port",
+                gtk_cell_renderer_text_new(), "text", REMOTE_PORT_COLUMN, nullptr));
+
+    g_object_unref(G_OBJECT(portWinBuilder));
+    g_object_unref(G_OBJECT(portBuilder));
+}
 
 void build_gui(App &app) {
     GtkWidget *hbox;
@@ -300,6 +356,7 @@ void build_gui(App &app) {
     GtkWidget *filemenu;
 
     app.mainWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    build_port_gui(app.ports);
     gtk_window_set_title(GTK_WINDOW(app.mainWindow), "Unnamed SSH client");
     vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
