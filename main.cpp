@@ -16,33 +16,10 @@
  */
 
 #include<ssh_util.hpp>
+#include<sftp.hpp>
 #include<util.hpp>
 #include<vte/vte.h>
 #include<gtk/gtk.h>
-#include<glib/gstdio.h>
-#include<fcntl.h>
-
-static const int SFTP_BUF_SIZE = 4*1024;
-
-enum SftpViewColumns {
-    NAME_COLUMN,
-    N_COLUMNS,
-};
-
-
-struct SftpWindow {
-    GtkBuilder *builder;
-    GtkWindow *sftp_window;
-    GtkTreeView *file_view;
-    GtkListStore *file_list;
-    GtkProgressBar *progress;
-    SftpFile remote_file;
-    int async_request;
-    std::string dirname;
-    int local_file;
-    char buf[SFTP_BUF_SIZE];
-    bool downloading;
-};
 
 enum PortForwardingColumns {
     HOST_COLUMN,
@@ -77,7 +54,6 @@ struct App {
     VteTerminal *terminal;
     SshSession session;
     SshChannel pty;
-    SftpSession sftp;
     PortForwardings ports;
 
     GIOChannel *session_channel;
@@ -92,42 +68,12 @@ void feed_terminal(App &a) {
     vte_terminal_feed(a.terminal, buf, num_read);
 }
 
-void feed_sftp(App &a) {
-    ssize_t bytes_written, bytes_read;
-    if(a.sftp_win.remote_file == nullptr) {
-        return;
-    }
-    // FIXME, can only read from remote.
-    bytes_read = sftp_async_read(a.sftp_win.remote_file, a.sftp_win.buf, SFTP_BUF_SIZE, a.sftp_win.async_request);
-    if(bytes_read == SSH_AGAIN) {
-        return;
-    }
-    if(bytes_read == 0) {
-        goto cleanup;
-    }
-    if(bytes_read < 0) {
-        printf("Error reading file: %s\n", ssh_get_error(a.session));
-        goto cleanup;
-    }
-    bytes_written = write(a.sftp_win.local_file, a.sftp_win.buf, bytes_read);
-    if(bytes_written != bytes_read) {
-        printf("Could not write to file.");
-        goto cleanup;
-    }
-    a.sftp_win.async_request = sftp_async_read_begin(a.sftp_win.remote_file, SFTP_BUF_SIZE);
-    return; // There is more data to transfer.
-
-cleanup:
-    close(a.sftp_win.local_file);
-    a.sftp_win.remote_file = SftpFile();
-}
-
 
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
     feed_terminal(a);
     if(a.sftp_win.downloading) {
-        feed_sftp(a);
+        feed_sftp(a.sftp_win);
     }
     return TRUE;
 }
@@ -139,8 +85,7 @@ gboolean key_pressed_cb(GtkWidget *widget, GdkEvent  *event, gpointer data) {
     return TRUE;
 }
 
-void connect(App &app, const char *hostname, const char *username, const char *passphrase, int conn_type) {
-    const unsigned int port=22;
+void connect(App &app, const char *hostname, const unsigned int port, const char *username, const char *passphrase, int conn_type) {
     SshSession &s = app.session;
     ssh_options_set(s, SSH_OPTIONS_HOST, hostname);
     ssh_options_set(s, SSH_OPTIONS_PORT, &port);
@@ -150,6 +95,7 @@ void connect(App &app, const char *hostname, const char *username, const char *p
         gtk_main_quit();
         return;
     }
+    app.sftp_win.session = app.session;
     auto state = ssh_is_server_known(s);
     if(state != SSH_SERVER_KNOWN_OK) {
         printf("Server is not previously known.\n");
@@ -172,129 +118,21 @@ void connect(App &app, const char *hostname, const char *username, const char *p
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
 
-gboolean async_uploader(gpointer data) {
-    App &a = *reinterpret_cast<App*>(data);
-    auto bytes_read = read(a.sftp_win.local_file, a.sftp_win.buf, SFTP_BUF_SIZE);
-    ssize_t bytes_written = 0;
-    feed_terminal(a); // Otherwise libssh drains the socket and glib does not see the events.
-    if(bytes_read < 0) {
-        printf("Could not read from file.\n");
-        goto cleanup;
-    }
-    if(bytes_read == 0) {
-        // All of input file has been read. Time to stop.
-        goto cleanup;
-    }
-    while(bytes_written < bytes_read) {
-        auto current_written = sftp_write(a.sftp_win.remote_file, a.sftp_win.buf + bytes_written, bytes_read-bytes_written);
-        if(current_written < 0) {
-            printf("Writing failed: %s", ssh_get_error(a.session));
-            goto cleanup;
-        }
-        bytes_written += current_written;
-    }
-    return G_SOURCE_CONTINUE;
-
-cleanup:
-    close(a.sftp_win.local_file);
-    a.sftp_win.remote_file = SftpFile();
-    return G_SOURCE_REMOVE;
-}
-
-void upload_file(App &a, const char *fname) {
-    int local_file = g_open(fname, O_RDONLY, 0);
-    if(local_file < 0) {
-        printf("Could not open file: %s\n", fname);
-        return;
-    }
-
-    std::string remote_name = a.sftp_win.dirname + "/" + split_filename(fname);
-    auto remote_file = sftp_open(a.sftp, remote_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-    if(remote_file == nullptr) {
-        printf("Could not open remote file %s.\n", ssh_get_error(a.session));
-        return;
-    }
-    a.sftp_win.remote_file = SftpFile(remote_file);
-    a.sftp_win.local_file = local_file;
-    g_idle_add(async_uploader, &a);
-}
-
-void load_sftp_dir_data(App &a, const char *newdir) {
-    SftpWindow &s = a.sftp_win;
-    s.dirname = newdir;
-    gtk_list_store_clear(s.file_list);
-    SftpDir dir = a.sftp.open_directory(newdir);
-    SftpAttributes attribute;
-    GtkTreeIter iter;
-    while((attribute = sftp_readdir(a.sftp, dir))) {
-        gtk_list_store_append(s.file_list, &iter);
-        gtk_list_store_set(s.file_list, &iter,
-                            NAME_COLUMN, attribute->name,
-                           -1);
-    }
-}
-
-void sftp_row_activated(GtkTreeView       *tree_view,
-                        GtkTreePath       *path,
-                        GtkTreeViewColumn *column,
-                        gpointer          data) {
-    App &a = *reinterpret_cast<App*>(data);
-    // FIXME assumes that the clicked thing is a file name.
-    GtkTreeIter iter;
-    gtk_tree_model_get_iter(GTK_TREE_MODEL(a.sftp_win.file_list), &iter, path);
-    GValue val = G_VALUE_INIT;
-    gtk_tree_model_get_value(GTK_TREE_MODEL(a.sftp_win.file_list), &iter, NAME_COLUMN, &val);
-    g_assert(G_VALUE_HOLDS_STRING(&val));
-    const char *fname = g_value_get_string(&val);
-    std::string full_remote_path = fname; // FIXME, path
-    std::string full_local_path = fname; // FIXME, use file dialog.
-    g_value_unset(&val);
-    auto remote_file = sftp_open(a.sftp, full_remote_path.c_str(), O_RDONLY, 0);
-    if(remote_file == nullptr) {
-        printf("Could not open file: %s\n", ssh_get_error(a.session));
-        return;
-    }
-    sftp_file_set_nonblocking(remote_file);
-    a.sftp_win.local_file = g_open(full_local_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-    if(a.sftp_win.local_file < 0) {
-        printf("Could not open local file.");
-        return;
-    }
-    int async_request = sftp_async_read_begin(remote_file, SFTP_BUF_SIZE);
-    a.sftp_win.remote_file = std::move(remote_file);
-    a.sftp_win.async_request = async_request;
-    a.sftp_win.downloading = true;
-}
-
-void open_sftp(App &a) {
-    a.sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
-    a.sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(a.sftp_win.builder, "sftp_window"));
-    a.sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(a.sftp_win.builder, "fileview"));
-    a.sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_STRING);
-    a.sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(a.sftp_win.builder, "transfer_progress"));
-
-    gtk_tree_view_set_model(a.sftp_win.file_view, GTK_TREE_MODEL(a.sftp_win.file_list));
-    gtk_tree_view_append_column(a.sftp_win.file_view,
-                gtk_tree_view_column_new_with_attributes("Filename",
-                        gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
-    g_signal_connect(GTK_WIDGET(a.sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated),& a);
-    //gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
-}
-
 void open_connection(GtkMenuItem *, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
     GtkWidget *host = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "host_entry"));
+    GtkWidget *port = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "port_spin"));
     GtkWidget *password = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "password_entry"));
     GtkWidget *username = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "username_entry"));
     GtkWidget *authentication = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "authentication_combo"));
     const char *host_str = gtk_entry_get_text(GTK_ENTRY(host));
+    unsigned int port_number = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(port));
     const char *username_str = gtk_entry_get_text(GTK_ENTRY(username));
     const char *password_str = gtk_entry_get_text(GTK_ENTRY(password));
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
-    connect(a, host_str, username_str, password_str, active_mode);
+    connect(a, host_str, port_number, username_str, password_str, active_mode);
     // All hacks here.
-    open_sftp(a);
-    a.sftp_win.dirname = ".";
+    open_sftp(a.sftp_win);
     feed_terminal(a);
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
