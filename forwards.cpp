@@ -26,6 +26,100 @@ enum PortForwardingColumns {
     PF_N_COLUMNS,
 };
 
+SshChannel open_forward_channel(PortForwardings &pf, int local_port, int remote_port, const char *source_host, const char *remote_host) {
+    SshChannel forward_channel(pf.session, ssh_channel_new(pf.session));
+    int rc;
+    if(forward_channel == nullptr) {
+        printf("Could not open ssh forwarding: %s", ssh_get_error(pf.session));
+        return forward_channel;
+    }
+
+    rc = ssh_channel_open_forward(forward_channel, remote_host, remote_port, source_host, local_port);
+    if(rc != SSH_OK) {
+        printf("Could not open forward channel: %s", ssh_get_error(pf.session));
+        return SshChannel();
+    }
+    return forward_channel;
+}
+
+void network_socket_has_data(GObject */*source_object*/, GAsyncResult *res, gpointer user_data) {
+    ForwardState *fs = reinterpret_cast<ForwardState*>(user_data);
+    int read_bytes = g_input_stream_read_finish(fs->istream, res, nullptr);
+    if(read_bytes >= 0) {
+        auto written_bytes = ssh_channel_write(fs->channel, fs->from_network, read_bytes);
+        g_input_stream_read_async(fs->istream,
+                                  fs->from_network,
+                                  FORW_BLOCK_SIZE,
+                                  G_PRIORITY_DEFAULT,
+                                  nullptr,
+                                  network_socket_has_data,
+                                  fs);
+    } else {
+        // FIXME, close connection?
+    }
+}
+
+gboolean incoming_connection(GSocketService *service, GSocketConnection *connection, GObject */*source_object*/, gpointer user_data) {
+    PortForwardings &pf = *reinterpret_cast<PortForwardings*>(user_data);
+    GValue val = G_VALUE_INIT;
+    GtkTreeIter iter;
+    GInetSocketAddress *local_address = G_INET_SOCKET_ADDRESS(g_socket_connection_get_local_address(connection, nullptr));
+    int local_port = g_inet_socket_address_get_port(local_address);
+    int remote_port;
+    g_object_unref(G_OBJECT(local_address));
+
+    const char *remote_host;
+    bool found = false;
+    gtk_tree_model_get_iter_first(GTK_TREE_MODEL(pf.forward_list), &iter);
+    do {
+        gtk_tree_model_get_value(GTK_TREE_MODEL(pf.forward_list), &iter, LOCAL_PORT_COLUMN, &val);
+        g_assert(G_VALUE_HOLDS_INT(&val));
+        int current_port = g_value_get_int(&val);
+        if(local_port == current_port) {
+            found = true;
+            break;
+        }
+    } while(gtk_tree_model_iter_next(GTK_TREE_MODEL(pf.forward_list), &iter));
+    g_value_unset(&val);
+    if(!found) {
+        return TRUE;
+    }
+    gtk_tree_model_get_value(GTK_TREE_MODEL(pf.forward_list), &iter, REMOTE_PORT_COLUMN, &val);
+    g_assert(G_VALUE_HOLDS_INT(&val));
+    remote_port = g_value_get_int(&val);
+    g_value_unset(&val);
+    gtk_tree_model_get_value(GTK_TREE_MODEL(pf.forward_list), &iter, HOST_COLUMN, &val);
+    g_assert(G_VALUE_HOLDS_STRING(&val));
+    remote_host = g_value_get_string(&val);
+
+    GInetSocketAddress *source_address = G_INET_SOCKET_ADDRESS(g_socket_connection_get_remote_address(connection, nullptr));
+    const char *source_address_string = g_inet_address_to_string(g_inet_socket_address_get_address(source_address));
+
+    auto channel = open_forward_channel(pf, local_port, remote_port, source_address_string, remote_host);
+    // Can't be released earlier as they hold the actual data used by the above function call.
+    g_object_unref(source_address);
+    g_value_unset(&val);
+    if(channel == nullptr) {
+        return TRUE;
+    }
+    g_object_ref(G_OBJECT(connection));
+    pf.ongoing.emplace_back(std::make_unique<ForwardState>());
+    ForwardState *fs = pf.ongoing.back().get();
+    fs->istream = g_io_stream_get_input_stream(G_IO_STREAM(connection));
+    fs->ostream = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+    fs->channel = std::move(channel);
+    fs->socket_connection = connection;
+    fs->port = local_port;
+    g_input_stream_read_async(fs->istream,
+                              fs->from_network,
+                              FORW_BLOCK_SIZE,
+                              G_PRIORITY_DEFAULT,
+                              nullptr,
+                              network_socket_has_data,
+                              fs);
+    return TRUE;
+}
+
 void open_new_forwarding(GtkMenuItem*, gpointer data) {
     PortForwardings &pf = *reinterpret_cast<PortForwardings*>(data);
     gtk_widget_show_all(GTK_WIDGET(pf.createWindow));
@@ -58,12 +152,16 @@ void create_new_forwarding(GtkMenuItem*, gpointer data) {
     }
     // FIXME, check that there is not already a forwarding for the
     // given port.
-    gtk_list_store_append(pf.forward_list, &iter);
-    gtk_list_store_set(pf.forward_list, &iter,
-                       HOST_COLUMN, host,
-                       LOCAL_PORT_COLUMN, local_port,
-                       REMOTE_PORT_COLUMN, remote_port,
-                      -1);
+    if(g_socket_listener_add_inet_port(G_SOCKET_LISTENER(pf.listener), local_port, nullptr, nullptr)) {
+        gtk_list_store_append(pf.forward_list, &iter);
+        gtk_list_store_set(pf.forward_list, &iter,
+                           HOST_COLUMN, host,
+                           LOCAL_PORT_COLUMN, local_port,
+                           REMOTE_PORT_COLUMN, remote_port,
+                          -1);
+    } else {
+        // FIXME add errors here.
+    }
 }
 
 void close_new_fw_window(GtkMenuItem*, gpointer data) {
@@ -110,4 +208,27 @@ void build_port_gui(PortForwardings &pf) {
                 gtk_tree_view_column_new_with_attributes("Remote port",
                 gtk_cell_renderer_text_new(), "text", REMOTE_PORT_COLUMN, nullptr));
     gtk_tree_selection_set_mode(gtk_tree_view_get_selection(pf.forwardings), GTK_SELECTION_SINGLE);
+
+    pf.listener = g_socket_service_new();
+    g_signal_connect(G_OBJECT(pf.listener), "incoming", G_CALLBACK(incoming_connection), &pf);
+}
+
+void feed_forwards(PortForwardings &pf) {
+    for(const auto &f : pf.ongoing) {
+        auto num_read = ssh_channel_read_nonblocking(f->channel, f->from_channel, FORW_BLOCK_SIZE, 0);
+        if(num_read == SSH_AGAIN) {
+            continue;
+        }
+        if(num_read < 0) {
+            printf("Error reading reply: %s", ssh_get_error(pf.session));
+            // FIXME, close connection.
+        }
+        if(num_read > 0) {
+            gsize bytes_written;
+            g_output_stream_write_all(f->ostream, f->from_channel, num_read, &bytes_written, nullptr, nullptr);
+            if(bytes_written != (gsize)num_read) {
+                // FIXME, close connection
+            }
+        }
+    }
 }

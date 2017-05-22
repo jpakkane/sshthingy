@@ -49,6 +49,7 @@ gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data)
     if(a.sftp_win.downloading) {
         feed_sftp(a.sftp_win);
     }
+    feed_forwards(a.ports);
     return TRUE;
 }
 
@@ -108,6 +109,7 @@ void open_connection(GtkMenuItem *, gpointer data) {
     // All hacks here.
     //open_sftp(a.sftp_win);
     feed_terminal(a);
+    a.ports.session = a.session;
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
     g_object_unref(G_OBJECT(a.connectionBuilder));
     a.connectionBuilder = nullptr;

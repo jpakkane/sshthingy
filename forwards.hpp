@@ -18,6 +18,26 @@
 #pragma once
 
 #include<gtk/gtk.h>
+#include<ssh_util.hpp>
+#include<vector>
+#include<memory>
+
+const constexpr int FORW_BLOCK_SIZE = 1024;
+
+struct ForwardState {
+    // Immovable because arrays are used for async operations.
+    ForwardState() = default;
+    ForwardState(const ForwardState&) = delete;
+    ForwardState(ForwardState&&) = delete;
+
+    GInputStream *istream;
+    GOutputStream *ostream;
+    GSocketConnection *socket_connection;
+    char from_network[FORW_BLOCK_SIZE];
+    char from_channel[FORW_BLOCK_SIZE];
+    SshChannel channel;
+    int port;
+};
 
 struct PortForwardings {
     GtkBuilder *forwardingBuilder;
@@ -38,7 +58,11 @@ struct PortForwardings {
     GtkButton *ok_button;
     GtkButton *cancel_button;
 
+    GSocketService *listener;
+    ssh_session session;
+    std::vector<std::unique_ptr<ForwardState>> ongoing;
 };
 
 void build_port_gui(PortForwardings &pf);
 
+void feed_forwards(PortForwardings &pf);
