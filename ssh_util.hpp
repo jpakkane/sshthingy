@@ -36,8 +36,15 @@ public:
     SshSession(const SshSession &other) = delete;
     SshSession& operator=(const SshSession &other) = delete;
 
-    SshSession(SshSession &&other) = default;
-    SshSession& operator=(SshSession &&other) = default;
+    SshSession(SshSession &&other) {
+        session = other.session;
+        other.session = nullptr;
+    }
+    SshSession& operator=(SshSession &&other) {
+        session = other.session;
+        other.session = nullptr;
+        return *this;
+    }
 
     SshChannel open_shell();
     operator ssh_session() { return session; }
@@ -61,7 +68,13 @@ public:
     SshChannel(const SshChannel &other) = delete;
     SshChannel& operator=(const SshChannel &other) = delete;
 
-    SshChannel(SshChannel &&other) = default;
+    SshChannel(SshChannel &&other) {
+        session = other.session;
+        channel = other.channel;
+        other.session = nullptr;
+        other.channel = nullptr;
+    }
+
     SshChannel& operator=(SshChannel &&other) {
         disconnect();
         session = other.session;
@@ -93,7 +106,13 @@ public:
     SftpSession(const SftpSession &other) = delete;
     SftpSession& operator=(const SftpSession &other) = delete;
 
-    SftpSession(SftpSession &&other) = default;
+    SftpSession(SftpSession &&other) {
+        session = other.session;
+        ftp_session = other.ftp_session;
+        other.session = nullptr;
+        other.ftp_session = nullptr;
+    }
+
     SftpSession& operator=(SftpSession &&other) {
         disconnect();
         session = other.session;
@@ -150,7 +169,11 @@ public:
     SftpFile(const SftpFile &other) = delete;
     SftpFile& operator=(const SftpFile &other) = delete;
 
-    SftpFile(SftpFile &&other) = default;
+    SftpFile(SftpFile &&other) {
+        file = other.file;
+        other.file = nullptr;
+    }
+
     SftpFile& operator=(SftpFile &&other) {
         disconnect();
         file = other.file;
@@ -175,7 +198,11 @@ public:
     SftpAttributes(const SftpAttributes &other) = delete;
     SftpAttributes& operator=(const SftpAttributes &other) = delete;
 
-    SftpAttributes(SftpAttributes &&other) = default;
+    SftpAttributes(SftpAttributes &&other) {
+        attributes = other.attributes;
+        other.attributes = nullptr;
+    }
+
     SftpAttributes& operator=(SftpAttributes &&other) {
         attributes = other.attributes;
         other.attributes = nullptr;

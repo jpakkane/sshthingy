@@ -47,6 +47,10 @@ void network_socket_has_data(GObject */*source_object*/, GAsyncResult *res, gpoi
     int read_bytes = g_input_stream_read_finish(fs->istream, res, nullptr);
     if(read_bytes >= 0) {
         auto written_bytes = ssh_channel_write(fs->channel, fs->from_network, read_bytes);
+        if(written_bytes < 0) {
+            printf("Error writing: %s\n", ssh_get_error(ssh_channel_get_session(fs->channel)));
+            // FIXME error out?
+        }
         g_input_stream_read_async(fs->istream,
                                   fs->from_network,
                                   FORW_BLOCK_SIZE,
