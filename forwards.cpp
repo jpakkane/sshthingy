@@ -54,7 +54,7 @@ void network_socket_has_data(GObject */*source_object*/, GAsyncResult *res, gpoi
         g_input_stream_read_async(fs->istream,
                                   fs->from_network,
                                   FORW_BLOCK_SIZE,
-                                  G_PRIORITY_DEFAULT,
+                                  G_PRIORITY_DEFAULT_IDLE,
                                   nullptr,
                                   network_socket_has_data,
                                   fs);
@@ -117,7 +117,7 @@ gboolean incoming_connection(GSocketService *service, GSocketConnection *connect
     g_input_stream_read_async(fs->istream,
                               fs->from_network,
                               FORW_BLOCK_SIZE,
-                              G_PRIORITY_DEFAULT,
+                              G_PRIORITY_DEFAULT_IDLE,
                               nullptr,
                               network_socket_has_data,
                               fs);
