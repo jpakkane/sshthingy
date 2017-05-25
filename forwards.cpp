@@ -18,6 +18,7 @@
 #include<forwards.hpp>
 #include<ssh_util.hpp>
 #include<util.hpp>
+#include<gio/gunixinputstream.h>
 
 enum PortForwardingColumns {
     HOST_COLUMN,
@@ -42,28 +43,23 @@ SshChannel open_forward_channel(PortForwardings &pf, int local_port, int remote_
     return forward_channel;
 }
 
-void network_socket_has_data(GObject */*source_object*/, GAsyncResult *res, gpointer user_data) {
-    ForwardState *fs = reinterpret_cast<ForwardState*>(user_data);
-    int read_bytes = g_input_stream_read_finish(fs->istream, res, nullptr);
-    if(read_bytes >= 0) {
+gboolean network_socket_has_data(GIOChannel *source, GIOCondition /*condition*/, gpointer data) {
+    ForwardState *fs = reinterpret_cast<ForwardState*>(data);
+    int read_bytes = g_input_stream_read(fs->istream, fs->from_network, FORW_BLOCK_SIZE, nullptr, nullptr);
+    if(read_bytes > 0) {
         auto written_bytes = ssh_channel_write(fs->channel, fs->from_network, read_bytes);
-        if(written_bytes < 0) {
+        if(written_bytes != read_bytes) {
             printf("Error writing: %s\n", ssh_get_error(ssh_channel_get_session(fs->channel)));
             // FIXME error out?
         }
-        g_input_stream_read_async(fs->istream,
-                                  fs->from_network,
-                                  FORW_BLOCK_SIZE,
-                                  G_PRIORITY_DEFAULT_IDLE,
-                                  nullptr,
-                                  network_socket_has_data,
-                                  fs);
     } else {
-        // FIXME, close connection?
+        close_forwarded_connection(fs);
+        return FALSE;
     }
+    return TRUE;
 }
 
-gboolean incoming_connection(GSocketService *service, GSocketConnection *connection, GObject */*source_object*/, gpointer user_data) {
+gboolean incoming_connection(GSocketService */*service*/, GSocketConnection *connection, GObject */*source_object*/, gpointer user_data) {
     PortForwardings &pf = *reinterpret_cast<PortForwardings*>(user_data);
     GValue val = G_VALUE_INIT;
     GtkTreeIter iter;
@@ -109,18 +105,16 @@ gboolean incoming_connection(GSocketService *service, GSocketConnection *connect
     g_object_ref(G_OBJECT(connection));
     pf.ongoing.emplace_back(std::make_unique<ForwardState>());
     ForwardState *fs = pf.ongoing.back().get();
+    fs->parent = &pf;
     fs->istream = g_io_stream_get_input_stream(G_IO_STREAM(connection));
     fs->ostream = g_io_stream_get_output_stream(G_IO_STREAM(connection));
     fs->channel = std::move(channel);
     fs->socket_connection = connection;
     fs->port = local_port;
-    g_input_stream_read_async(fs->istream,
-                              fs->from_network,
-                              FORW_BLOCK_SIZE,
-                              G_PRIORITY_DEFAULT_IDLE,
-                              nullptr,
-                              network_socket_has_data,
-                              fs);
+    gint fd = g_socket_get_fd(g_socket_connection_get_socket(connection));
+    fs->network_channel = g_io_channel_unix_new(fd);
+    fs->network_watch_id = g_io_add_watch(fs->network_channel, G_IO_IN, (GIOFunc) network_socket_has_data, fs);
+
     return TRUE;
 }
 
@@ -238,4 +232,19 @@ bool feed_forwards(PortForwardings &pf) {
         }
     }
     return read_data;
+}
+
+bool close_forwarded_connection(ForwardState *fs) {
+    auto &ongoing = fs->parent->ongoing;
+    for(size_t i=0; i<ongoing.size(); i++) {
+        if(ongoing[i].get() == fs) {
+            g_input_stream_close(fs->istream, nullptr, nullptr);
+            g_output_stream_close(fs->ostream, nullptr, nullptr);
+            g_object_unref(G_OBJECT(fs->socket_connection));
+            g_io_channel_shutdown(fs->network_channel, TRUE, nullptr);
+            ongoing.erase(ongoing.begin()+i);
+            return true;
+        }
+    }
+    return false;
 }

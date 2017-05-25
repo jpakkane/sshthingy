@@ -24,7 +24,10 @@
 
 const constexpr int FORW_BLOCK_SIZE = 1024;
 
+struct PortForwardings;
+
 struct ForwardState {
+    PortForwardings *parent;
     // Immovable because arrays are used for async operations.
     ForwardState() = default;
     ForwardState(const ForwardState&) = delete;
@@ -37,6 +40,8 @@ struct ForwardState {
     char from_channel[FORW_BLOCK_SIZE];
     SshChannel channel;
     int port;
+    GIOChannel *network_channel;
+    guint network_watch_id;
 };
 
 struct PortForwardings {
@@ -66,3 +71,5 @@ struct PortForwardings {
 void build_port_gui(PortForwardings &pf);
 
 bool feed_forwards(PortForwardings &pf);
+
+bool close_forwarded_connection(ForwardState *fs);
