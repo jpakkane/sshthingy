@@ -21,3 +21,5 @@
 
 std::string data_file_name(const char *basename);
 std::string split_filename(const char *fname);
+
+bool fd_has_data(int fd);

@@ -45,11 +45,27 @@ void feed_terminal(App &a) {
 
 gboolean session_has_data(GIOChannel *channel, GIOCondition cond, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
+    bool forwards_had_data;
     feed_terminal(a);
     if(a.sftp_win.downloading) {
         feed_sftp(a.sftp_win);
     }
-    feed_forwards(a.ports);
+    // Process data that libssh has hidden in its buffers.
+    // Must handle the case where the remote connection pushes data
+    // faster than we can push to the client. A simple "read until
+    // nothing left" can get stuck in an eternal loop.
+    while(true) {
+        forwards_had_data = feed_forwards(a.ports);
+        if(!forwards_had_data) {
+            // a) there is no more data inside libssh
+            break;
+        }
+        if(fd_has_data(g_io_channel_unix_get_fd(a.session_channel))) {
+            // There is data in the socket, but in this case glib will call this
+            // function so it will get processed then.
+            break;
+        }
+    }
     return TRUE;
 }
 

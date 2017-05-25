@@ -217,17 +217,19 @@ void build_port_gui(PortForwardings &pf) {
     g_signal_connect(G_OBJECT(pf.listener), "incoming", G_CALLBACK(incoming_connection), &pf);
 }
 
-void feed_forwards(PortForwardings &pf) {
+bool feed_forwards(PortForwardings &pf) {
+    bool read_data = false;
     for(const auto &f : pf.ongoing) {
         auto num_read = ssh_channel_read_nonblocking(f->channel, f->from_channel, FORW_BLOCK_SIZE, 0);
         if(num_read == SSH_AGAIN) {
             continue;
         }
         if(num_read < 0) {
-            printf("Error reading reply: %s", ssh_get_error(pf.session));
+            printf("Error reading reply: %s\n", ssh_get_error(pf.session));
             // FIXME, close connection.
         }
         if(num_read > 0) {
+            read_data = true;
             gsize bytes_written;
             g_output_stream_write_all(f->ostream, f->from_channel, num_read, &bytes_written, nullptr, nullptr);
             if(bytes_written != (gsize)num_read) {
@@ -235,4 +237,5 @@ void feed_forwards(PortForwardings &pf) {
             }
         }
     }
+    return read_data;
 }

@@ -65,4 +65,4 @@ struct PortForwardings {
 
 void build_port_gui(PortForwardings &pf);
 
-void feed_forwards(PortForwardings &pf);
+bool feed_forwards(PortForwardings &pf);

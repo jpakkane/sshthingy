@@ -18,6 +18,8 @@
 #include<util.hpp>
 #include<string>
 
+#include<sys/select.h>
+
 // FIXME, should look up PREFIX/share/whatever, envvar override
 // and build dir. Currently hardcodes running from build dir.
 std::string data_file_name(const char *basename) {
@@ -31,4 +33,22 @@ std::string split_filename(const char *fname) {
         return f;
     }
     return f.substr(slash_loc+1, std::string::npos);
+}
+
+
+
+bool fd_has_data(int fd) {
+    fd_set rfds;
+    struct timeval tv;
+    int retval;
+
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+
+    retval = select(1, &rfds, NULL, NULL, &tv);
+
+    return retval > 0;
 }
