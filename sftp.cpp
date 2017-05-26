@@ -78,6 +78,8 @@ void feed_sftp(SftpWindow &sftp_win) {
         printf("Error reading file: %s\n", ssh_get_error(sftp_win.session));
         goto cleanup;
     }
+    sftp_win.downloaded_bytes += bytes_read;
+    gtk_progress_bar_set_fraction(sftp_win.progress, ((double)(sftp_win.downloaded_bytes)) / sftp_win.download_size);
     bytes_written = write(sftp_win.local_file, sftp_win.buf, bytes_read);
     if(bytes_written != bytes_read) {
         printf("Could not write to file.");
@@ -89,6 +91,8 @@ void feed_sftp(SftpWindow &sftp_win) {
 cleanup:
     close(sftp_win.local_file);
     sftp_win.remote_file = SftpFile();
+    gtk_widget_set_sensitive(GTK_WIDGET(sftp_win.sftp_window), TRUE);
+    gtk_progress_bar_set_fraction(sftp_win.progress, 0);
 }
 
 void load_sftp_dir_data(SftpWindow &s, const char *newdir) {
@@ -111,6 +115,89 @@ void load_sftp_dir_data(SftpWindow &s, const char *newdir) {
                            SIZE_COLUMN, e.size,
                           -1);
     }
+}
+
+std::string get_output_file_name(GtkWindow *parent_window, const std::string fname) {
+    std::string result;
+    GtkWidget *dialog;
+    GtkFileChooser *chooser;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SAVE;
+    gint res;
+
+    dialog = gtk_file_chooser_dialog_new("Save File",
+                                         parent_window,
+                                         action,
+                                         "_Cancel",
+                                          GTK_RESPONSE_CANCEL,
+                                         "_Save",
+                                         GTK_RESPONSE_ACCEPT,
+                                         NULL);
+    chooser = GTK_FILE_CHOOSER (dialog);
+    gtk_file_chooser_set_current_name(chooser, fname.c_str());
+    gtk_file_chooser_set_do_overwrite_confirmation (chooser, TRUE);
+    res = gtk_dialog_run (GTK_DIALOG (dialog));
+    if (res == GTK_RESPONSE_ACCEPT) {
+        char *filename;
+        filename = gtk_file_chooser_get_filename(chooser);
+        result = filename;
+        g_free (filename);
+    }
+
+    gtk_widget_destroy (dialog);
+
+    return result;
+}
+
+void download_clicked(GtkButton *, gpointer data) {
+    SftpWindow *sftp_win = reinterpret_cast<SftpWindow*>(data);
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(sftp_win->file_view));
+    GtkTreeIter iter;
+    if(!gtk_tree_selection_get_selected(sel, nullptr, &iter)) {
+        // No entry is selected, bail out.
+        return;
+    }
+    GValue val = G_VALUE_INIT;
+    gtk_tree_model_get_value(GTK_TREE_MODEL(sftp_win->file_list), &iter, NAME_COLUMN, &val);
+    g_assert(G_VALUE_HOLDS_STRING(&val));
+    std::string fname(g_value_get_string(&val));
+    g_value_unset(&val);
+    gtk_tree_model_get_value(GTK_TREE_MODEL(sftp_win->file_list), &iter, IS_DIR_COLUMN, &val);
+    bool is_dir = g_value_get_boolean(&val) == TRUE;
+    g_value_unset(&val);
+    gtk_tree_model_get_value(GTK_TREE_MODEL(sftp_win->file_list), &iter, SIZE_COLUMN, &val);
+    sftp_win->download_size = g_value_get_uint64(&val);
+    g_value_unset(&val);
+    if(is_dir) {
+        // FIXME download full directories.
+        return;
+    }
+    std::string full_remote_path = fname; // FIXME, path
+    std::string full_local_path = get_output_file_name(sftp_win->sftp_window, fname);
+    if(full_local_path.empty()) {
+        return;
+    }
+    auto remote_file = sftp_open(sftp_win->sftp, full_remote_path.c_str(), O_RDONLY, 0);
+    if(remote_file == nullptr) {
+        printf("Could not open file: %s\n", ssh_get_error(sftp_win->session));
+        return;
+    }
+    sftp_file_set_nonblocking(remote_file);
+    sftp_win->local_file = g_open(full_local_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+    if(sftp_win->local_file < 0) {
+        printf("Could not open local file.");
+        return;
+    }
+    int async_request = sftp_async_read_begin(remote_file, SFTP_BUF_SIZE);
+    sftp_win->remote_file = std::move(remote_file);
+    sftp_win->async_request = async_request;
+    sftp_win->downloading = true;
+    sftp_win->downloaded_bytes = 0;
+    gtk_progress_bar_set_fraction(sftp_win->progress, 0);
+    gtk_widget_set_sensitive(GTK_WIDGET(sftp_win->sftp_window), FALSE);
+}
+
+void upload_clicked(GtkButton *, gpointer data) {
+    SftpWindow *sftp_win = reinterpret_cast<SftpWindow*>(data);
 }
 
 void sftp_row_activated(GtkTreeView       *tree_view,
@@ -155,6 +242,8 @@ void build_sftp_win(SftpWindow &sftp_win) {
     sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(sftp_win.builder, "sftp_window"));
     sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(sftp_win.builder, "fileview"));
     sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_UINT64);
+    sftp_win.download_button = GTK_BUTTON(gtk_builder_get_object(sftp_win.builder, "download_button"));
+    sftp_win.upload_button = GTK_BUTTON(gtk_builder_get_object(sftp_win.builder, "upload_button"));
     sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(sftp_win.builder, "transfer_progress"));
 
     gtk_tree_view_set_model(sftp_win.file_view, GTK_TREE_MODEL(sftp_win.file_list));
@@ -164,6 +253,8 @@ void build_sftp_win(SftpWindow &sftp_win) {
     gtk_tree_view_append_column(sftp_win.file_view,
                 gtk_tree_view_column_new_with_attributes("Size",
                 gtk_cell_renderer_text_new(), "text", SIZE_COLUMN, nullptr));
+    g_signal_connect(GTK_WIDGET(sftp_win.download_button), "clicked", G_CALLBACK(download_clicked), &sftp_win);
+    g_signal_connect(GTK_WIDGET(sftp_win.upload_button), "clicked", G_CALLBACK(upload_clicked), &sftp_win);
     g_signal_connect(GTK_WIDGET(sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated), &sftp_win);
 }
 

@@ -30,6 +30,8 @@ struct SftpWindow {
     GtkWindow *sftp_window;
     GtkTreeView *file_view;
     GtkListStore *file_list;
+    GtkButton *download_button;
+    GtkButton *upload_button;
     GtkProgressBar *progress;
     ssh_session session; // A non-owning pointer.
     SftpSession sftp;
@@ -39,6 +41,8 @@ struct SftpWindow {
     int local_file;
     char buf[SFTP_BUF_SIZE];
     bool downloading;
+    uint64_t download_size;
+    uint64_t downloaded_bytes;
 };
 
 void open_sftp(SftpWindow &sftp_win);
