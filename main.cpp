@@ -104,7 +104,6 @@ void connect(App &app, const char *hostname, const unsigned int port, const char
         return;
     }
     app.pty = s.open_shell();
-    //app.sftp = s.open_sftp_session();
     app.session_channel = g_io_channel_unix_new(ssh_get_fd(s));
     g_io_add_watch(app.session_channel, G_IO_IN, session_has_data, &app);
 }
@@ -122,8 +121,6 @@ void open_connection(GtkMenuItem *, gpointer data) {
     const char *password_str = gtk_entry_get_text(GTK_ENTRY(password));
     gint active_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(authentication));
     connect(a, host_str, port_number, username_str, password_str, active_mode);
-    // All hacks here.
-    //open_sftp(a.sftp_win);
     feed_terminal(a);
     a.ports.session = a.session;
     gtk_widget_destroy(GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window")));
@@ -150,6 +147,10 @@ void launch_connection_dialog(GtkMenuItem *, gpointer data) {
 
 void open_sftp_window(GtkMenuItem *, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
+    build_sftp_win(a.sftp_win);
+    a.sftp_win.sftp = a.session.open_sftp_session();
+    open_sftp(a.sftp_win);
+    gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
 }
 
 void open_forwardings_window(GtkMenuItem *, gpointer data) {

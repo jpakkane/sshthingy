@@ -41,5 +41,6 @@ struct SftpWindow {
     bool downloading;
 };
 
-void feed_sftp(SftpWindow &sftp_win);
 void open_sftp(SftpWindow &sftp_win);
+void feed_sftp(SftpWindow &sftp_win);
+void build_sftp_win(SftpWindow &sftp_win);

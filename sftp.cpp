@@ -102,6 +102,10 @@ void sftp_row_activated(GtkTreeView       *tree_view,
 }
 
 void open_sftp(SftpWindow &sftp_win) {
+    load_sftp_dir_data(sftp_win, ".");
+}
+
+void build_sftp_win(SftpWindow &sftp_win) {
     sftp_win.dirname = ".";
     sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
     sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(sftp_win.builder, "sftp_window"));
@@ -114,7 +118,6 @@ void open_sftp(SftpWindow &sftp_win) {
                 gtk_tree_view_column_new_with_attributes("Filename",
                 gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
     g_signal_connect(GTK_WIDGET(sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated), &sftp_win);
-    //gtk_widget_show_all(GTK_WIDGET(a.sftp_win.sftp_window));
 }
 
 gboolean async_uploader(gpointer data) {
