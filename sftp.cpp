@@ -61,12 +61,10 @@ enum SftpViewColumns {
     N_COLUMNS,
 };
 
-void feed_sftp(SftpWindow &sftp_win) {
+void upload_file(SftpWindow &sftp_win, const char *fname);
+
+void feed_sftp_download(SftpWindow &sftp_win) {
     ssize_t bytes_written, bytes_read;
-    if(sftp_win.remote_file == nullptr) {
-        return;
-    }
-    // FIXME, can only read from remote.
     bytes_read = sftp_async_read(sftp_win.remote_file, sftp_win.buf, SFTP_BUF_SIZE, sftp_win.async_request);
     if(bytes_read == SSH_AGAIN) {
         return;
@@ -80,7 +78,7 @@ void feed_sftp(SftpWindow &sftp_win) {
     }
     sftp_win.downloaded_bytes += bytes_read;
     gtk_progress_bar_set_fraction(sftp_win.progress, ((double)(sftp_win.downloaded_bytes)) / sftp_win.download_size);
-    bytes_written = write(sftp_win.local_file, sftp_win.buf, bytes_read);
+    bytes_written = g_output_stream_write(G_OUTPUT_STREAM(sftp_win.download_file), sftp_win.buf, bytes_read, nullptr, nullptr);
     if(bytes_written != bytes_read) {
         printf("Could not write to file.");
         goto cleanup;
@@ -89,10 +87,26 @@ void feed_sftp(SftpWindow &sftp_win) {
     return; // There is more data to transfer.
 
 cleanup:
-    close(sftp_win.local_file);
+    g_object_unref(G_OBJECT(sftp_win.download_file));
     sftp_win.remote_file = SftpFile();
+    sftp_win.downloading = false;
     gtk_widget_set_sensitive(GTK_WIDGET(sftp_win.sftp_window), TRUE);
     gtk_progress_bar_set_fraction(sftp_win.progress, 0);
+}
+
+void feed_sftp(SftpWindow &sftp_win) {
+    /*
+    if(sftp_win.remote_file == nullptr) {
+        return;
+    }*/
+    if(sftp_win.downloading) {
+        feed_sftp_download(sftp_win);
+    }
+    /* The event model is asymmetrical. Upload is handled with an idle callback.
+    if(sftp_wind.uploading) {
+        feed_sftp_upload(sftp_win);
+    }
+    */
 }
 
 void load_sftp_dir_data(SftpWindow &s, const char *newdir) {
@@ -135,8 +149,37 @@ std::string get_output_file_name(GtkWindow *parent_window, const std::string fna
     chooser = GTK_FILE_CHOOSER (dialog);
     gtk_file_chooser_set_current_name(chooser, fname.c_str());
     gtk_file_chooser_set_do_overwrite_confirmation (chooser, TRUE);
-    res = gtk_dialog_run (GTK_DIALOG (dialog));
-    if (res == GTK_RESPONSE_ACCEPT) {
+    res = gtk_dialog_run(GTK_DIALOG (dialog));
+    if(res == GTK_RESPONSE_ACCEPT) {
+        char *filename;
+        filename = gtk_file_chooser_get_filename(chooser);
+        result = filename;
+        g_free (filename);
+    }
+
+    gtk_widget_destroy (dialog);
+
+    return result;
+}
+
+std::string get_file_to_upload(GtkWindow *parent_window) {
+    std::string result;
+    GtkWidget *dialog;
+    GtkFileChooser *chooser;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
+    gint res;
+
+    dialog = gtk_file_chooser_dialog_new("Upload File",
+                                         parent_window,
+                                         action,
+                                         "_Cancel",
+                                          GTK_RESPONSE_CANCEL,
+                                         "_Upload",
+                                         GTK_RESPONSE_ACCEPT,
+                                         NULL);
+    chooser = GTK_FILE_CHOOSER (dialog);
+    res = gtk_dialog_run(GTK_DIALOG (dialog));
+    if(res == GTK_RESPONSE_ACCEPT) {
         char *filename;
         filename = gtk_file_chooser_get_filename(chooser);
         result = filename;
@@ -182,11 +225,14 @@ void download_clicked(GtkButton *, gpointer data) {
         return;
     }
     sftp_file_set_nonblocking(remote_file);
-    sftp_win->local_file = g_open(full_local_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-    if(sftp_win->local_file < 0) {
+    GFile *gf = g_file_new_for_path(full_local_path.c_str());
+    sftp_win->download_file = g_file_replace(gf, nullptr, FALSE, G_FILE_CREATE_NONE, nullptr, nullptr);
+    g_object_unref(G_OBJECT(gf));
+    if(!sftp_win->download_file) {
         printf("Could not open local file.");
         return;
     }
+    g_assert(!sftp_win->uploading);
     int async_request = sftp_async_read_begin(remote_file, SFTP_BUF_SIZE);
     sftp_win->remote_file = std::move(remote_file);
     sftp_win->async_request = async_request;
@@ -198,6 +244,11 @@ void download_clicked(GtkButton *, gpointer data) {
 
 void upload_clicked(GtkButton *, gpointer data) {
     SftpWindow *sftp_win = reinterpret_cast<SftpWindow*>(data);
+    std::string fname = get_file_to_upload(sftp_win->sftp_window);
+    if(fname.empty()) {
+        return;
+    }
+    upload_file(*sftp_win, fname.c_str());
 }
 
 void sftp_row_activated(GtkTreeView       *tree_view,
@@ -205,31 +256,7 @@ void sftp_row_activated(GtkTreeView       *tree_view,
                         GtkTreeViewColumn *column,
                         gpointer          data) {
     SftpWindow *sftp_win = reinterpret_cast<SftpWindow*>(data);
-    // FIXME assumes that the clicked thing is a file name.
-    GtkTreeIter iter;
-    gtk_tree_model_get_iter(GTK_TREE_MODEL(sftp_win->file_list), &iter, path);
-    GValue val = G_VALUE_INIT;
-    gtk_tree_model_get_value(GTK_TREE_MODEL(sftp_win->file_list), &iter, NAME_COLUMN, &val);
-    g_assert(G_VALUE_HOLDS_STRING(&val));
-    const char *fname = g_value_get_string(&val);
-    std::string full_remote_path = fname; // FIXME, path
-    std::string full_local_path = fname; // FIXME, use file dialog.
-    g_value_unset(&val);
-    auto remote_file = sftp_open(sftp_win->sftp, full_remote_path.c_str(), O_RDONLY, 0);
-    if(remote_file == nullptr) {
-        printf("Could not open file: %s\n", ssh_get_error(sftp_win->session));
-        return;
-    }
-    sftp_file_set_nonblocking(remote_file);
-    sftp_win->local_file = g_open(full_local_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
-    if(sftp_win->local_file < 0) {
-        printf("Could not open local file.");
-        return;
-    }
-    int async_request = sftp_async_read_begin(remote_file, SFTP_BUF_SIZE);
-    sftp_win->remote_file = std::move(remote_file);
-    sftp_win->async_request = async_request;
-    sftp_win->downloading = true;
+    // FIXME download or cd.
 }
 
 void open_sftp(SftpWindow &sftp_win) {
@@ -256,13 +283,14 @@ void build_sftp_win(SftpWindow &sftp_win) {
     g_signal_connect(GTK_WIDGET(sftp_win.download_button), "clicked", G_CALLBACK(download_clicked), &sftp_win);
     g_signal_connect(GTK_WIDGET(sftp_win.upload_button), "clicked", G_CALLBACK(upload_clicked), &sftp_win);
     g_signal_connect(GTK_WIDGET(sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated), &sftp_win);
+    sftp_win.uploading = false;
+    sftp_win.downloading = false;
 }
 
 gboolean async_uploader(gpointer data) {
     SftpWindow &sftp_win = *reinterpret_cast<SftpWindow*>(data);
-    auto bytes_read = read(sftp_win.local_file, sftp_win.buf, SFTP_BUF_SIZE);
+    auto bytes_read = g_input_stream_read(G_INPUT_STREAM(sftp_win.upload_file), sftp_win.buf, SFTP_BUF_SIZE, nullptr, nullptr);
     ssize_t bytes_written = 0;
-    //feed_terminal(a); // Otherwise libssh drains the socket and glib does not see the events.
     if(bytes_read < 0) {
         printf("Could not read from file.\n");
         goto cleanup;
@@ -279,17 +307,37 @@ gboolean async_uploader(gpointer data) {
         }
         bytes_written += current_written;
     }
+    sftp_win.uploaded_bytes += bytes_written;
+    gtk_progress_bar_set_fraction(sftp_win.progress, ((double)(sftp_win.uploaded_bytes)) / sftp_win.upload_size);
     return G_SOURCE_CONTINUE;
 
 cleanup:
-    close(sftp_win.local_file);
+    g_object_unref(G_OBJECT(sftp_win.upload_file));
     sftp_win.remote_file = SftpFile();
+    sftp_win.uploading = false;
+    gtk_progress_bar_set_fraction(sftp_win.progress, 0);
+    gtk_widget_set_sensitive(GTK_WIDGET(sftp_win.sftp_window), TRUE);
     return G_SOURCE_REMOVE;
 }
 
 void upload_file(SftpWindow &sftp_win, const char *fname) {
-    int local_file = g_open(fname, O_RDONLY, 0);
-    if(local_file < 0) {
+    g_assert(!sftp_win.downloading);
+    GFile *gf = g_file_new_for_path(fname);
+    sftp_win.upload_file = g_file_read(gf, nullptr, nullptr);
+    /* This should work but always returns 0.
+    GFileInfo *fi = g_file_query_info(gf, nullptr, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    sftp_win.upload_size = g_file_info_get_size(fi);
+    g_object_unref(G_OBJECT(fi));
+    */
+    struct stat buf;
+    if(stat(fname, &buf) == 0) {
+        sftp_win.upload_size = buf.st_size;
+    } else {
+        sftp_win.upload_size = 0;
+    }
+    g_object_unref(G_OBJECT(gf));
+
+    if(!sftp_win.upload_file) {
         printf("Could not open file: %s\n", fname);
         return;
     }
@@ -297,10 +345,12 @@ void upload_file(SftpWindow &sftp_win, const char *fname) {
     std::string remote_name = sftp_win.dirname + "/" + split_filename(fname);
     auto remote_file = sftp_open(sftp_win.sftp, remote_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
     if(remote_file == nullptr) {
+        g_object_unref(G_OBJECT(sftp_win.upload_file));
         printf("Could not open remote file %s.\n", ssh_get_error(sftp_win.session));
         return;
     }
     sftp_win.remote_file = SftpFile(remote_file);
-    sftp_win.local_file = local_file;
     g_idle_add(async_uploader, &sftp_win);
+    sftp_win.uploading = true;
+    sftp_win.uploaded_bytes = 0;
 }

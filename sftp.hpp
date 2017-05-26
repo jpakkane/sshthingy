@@ -38,11 +38,17 @@ struct SftpWindow {
     SftpFile remote_file;
     int async_request;
     std::string dirname;
-    int local_file;
+    GFileInputStream *upload_file;
+    GFileOutputStream *download_file;
     char buf[SFTP_BUF_SIZE];
     bool downloading;
+    bool uploading;
+
     uint64_t download_size;
     uint64_t downloaded_bytes;
+
+    uint64_t upload_size;
+    uint64_t uploaded_bytes;
 };
 
 void open_sftp(SftpWindow &sftp_win);
