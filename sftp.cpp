@@ -19,9 +19,45 @@
 #include<fcntl.h>
 #include<util.hpp>
 #include<glib/gstdio.h>
+#include<vector>
+#include<algorithm>
+
+struct DirEntry {
+    std::string name;
+    bool is_dir;
+    uint64_t size;
+
+    // Sort by directoryness, then by name.
+    bool operator<(const DirEntry &other) const {
+        if(&other == this) {
+            return false;
+        }
+        if(is_dir && !other.is_dir) {
+            return true;
+        }
+        if(other.is_dir && !is_dir) {
+            return false;
+        }
+        if(name == ".") { // Each directory has only one of these.
+            return true;
+        }
+        if(other.name == ".") {
+            return false;
+        }
+        if(name == "..") {
+            return true;
+        }
+        if(other.name == "..") {
+            return false;
+        }
+        return name < other.name;
+    }
+};
 
 enum SftpViewColumns {
+    IS_DIR_COLUMN,
     NAME_COLUMN,
+    SIZE_COLUMN,
     N_COLUMNS,
 };
 
@@ -61,11 +97,19 @@ void load_sftp_dir_data(SftpWindow &s, const char *newdir) {
     SftpDir dir = s.sftp.open_directory(newdir);
     SftpAttributes attribute;
     GtkTreeIter iter;
+    std::vector<DirEntry> entries;
     while((attribute = sftp_readdir(s.sftp, dir))) {
+        DirEntry e = {attribute->name, attribute->type == SSH_FILEXFER_TYPE_DIRECTORY, attribute->size};
+        entries.push_back(std::move(e));
+    }
+    std::sort(entries.begin(), entries.end());
+    for(const auto &e : entries) {
         gtk_list_store_append(s.file_list, &iter);
         gtk_list_store_set(s.file_list, &iter,
-                            NAME_COLUMN, attribute->name,
-                           -1);
+                           IS_DIR_COLUMN, (gboolean) e.is_dir,
+                           NAME_COLUMN, e.name.c_str(),
+                           SIZE_COLUMN, e.size,
+                          -1);
     }
 }
 
@@ -110,13 +154,16 @@ void build_sftp_win(SftpWindow &sftp_win) {
     sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
     sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(sftp_win.builder, "sftp_window"));
     sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(sftp_win.builder, "fileview"));
-    sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_STRING);
+    sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_UINT64);
     sftp_win.progress = GTK_PROGRESS_BAR(gtk_builder_get_object(sftp_win.builder, "transfer_progress"));
 
     gtk_tree_view_set_model(sftp_win.file_view, GTK_TREE_MODEL(sftp_win.file_list));
     gtk_tree_view_append_column(sftp_win.file_view,
                 gtk_tree_view_column_new_with_attributes("Filename",
                 gtk_cell_renderer_text_new(), "text", NAME_COLUMN, nullptr));
+    gtk_tree_view_append_column(sftp_win.file_view,
+                gtk_tree_view_column_new_with_attributes("Size",
+                gtk_cell_renderer_text_new(), "text", SIZE_COLUMN, nullptr));
     g_signal_connect(GTK_WIDGET(sftp_win.file_view), "row-activated", G_CALLBACK(sftp_row_activated), &sftp_win);
 }
 
