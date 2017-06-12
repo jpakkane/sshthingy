@@ -289,30 +289,27 @@ void build_sftp_win(SftpWindow &sftp_win) {
 
 gboolean async_uploader(gpointer data) {
     SftpWindow &sftp_win = *reinterpret_cast<SftpWindow*>(data);
-    auto bytes_read = g_input_stream_read(G_INPUT_STREAM(sftp_win.upload_file), sftp_win.buf, SFTP_BUF_SIZE, nullptr, nullptr);
-    ssize_t bytes_written = 0;
-    if(bytes_read < 0) {
-        printf("Could not read from file.\n");
-        goto cleanup;
-    }
-    if(bytes_read == 0) {
+    ssize_t current_written = 0;
+    auto current_chunk_size = std::min(SFTP_UPLOAD_CHUNK_SIZE, sftp_win.upload_size - sftp_win.uploaded_bytes);
+    if(current_chunk_size == 0) {
         // All of input file has been read. Time to stop.
         goto cleanup;
     }
-    while(bytes_written < bytes_read) {
-        auto current_written = sftp_write(sftp_win.remote_file, sftp_win.buf + bytes_written, bytes_read-bytes_written);
-        if(current_written < 0) {
-            printf("Writing failed: %s", ssh_get_error(sftp_win.session));
-            goto cleanup;
-        }
-        bytes_written += current_written;
+
+    current_written = sftp_write(sftp_win.remote_file,
+                                 g_mapped_file_get_contents(sftp_win.upload_file) + sftp_win.uploaded_bytes,
+                                 current_chunk_size);
+    if(current_written < 0) {
+        printf("Writing failed: %s", ssh_get_error(sftp_win.session));
+        goto cleanup;
     }
-    sftp_win.uploaded_bytes += bytes_written;
+    sftp_win.uploaded_bytes += current_written;
     gtk_progress_bar_set_fraction(sftp_win.progress, ((double)(sftp_win.uploaded_bytes)) / sftp_win.upload_size);
     return G_SOURCE_CONTINUE;
 
 cleanup:
-    g_object_unref(G_OBJECT(sftp_win.upload_file));
+    g_mapped_file_unref(sftp_win.upload_file);
+    sftp_win.upload_file = nullptr;
     sftp_win.remote_file = SftpFile();
     sftp_win.uploading = false;
     gtk_progress_bar_set_fraction(sftp_win.progress, 0);
@@ -322,28 +319,27 @@ cleanup:
 
 void upload_file(SftpWindow &sftp_win, const char *fname) {
     g_assert(!sftp_win.downloading);
-    GFile *gf = g_file_new_for_path(fname);
-    sftp_win.upload_file = g_file_read(gf, nullptr, nullptr);
-    /* This should work but always returns 0.
-    GFileInfo *fi = g_file_query_info(gf, nullptr, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
-    sftp_win.upload_size = g_file_info_get_size(fi);
-    g_object_unref(G_OBJECT(fi));
-    */
+    GError *err = nullptr;
     struct stat buf;
+    mode_t fmode = S_IRWXU;
     if(stat(fname, &buf) == 0) {
-        sftp_win.upload_size = buf.st_size;
-    } else {
-        sftp_win.upload_size = 0;
+        fmode = buf.st_mode;
     }
-    g_object_unref(G_OBJECT(gf));
-
+    sftp_win.upload_file = g_mapped_file_new(fname, FALSE, &err);
+    if(err) {
+        printf("Mmap fail: %s.\n", err->message);
+        g_error_free(err);
+        return;
+    }
+    sftp_win.upload_size = g_mapped_file_get_length(sftp_win.upload_file);
     if(!sftp_win.upload_file) {
         printf("Could not open file: %s\n", fname);
         return;
     }
 
     std::string remote_name = sftp_win.dirname + "/" + split_filename(fname);
-    auto remote_file = sftp_open(sftp_win.sftp, remote_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+    /* FIXME, maybe we should write to a temp file and rename atomically? */
+    auto remote_file = sftp_open(sftp_win.sftp, remote_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, fmode);
     if(remote_file == nullptr) {
         g_object_unref(G_OBJECT(sftp_win.upload_file));
         printf("Could not open remote file %s.\n", ssh_get_error(sftp_win.session));

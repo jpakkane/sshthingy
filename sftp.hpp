@@ -17,13 +17,15 @@
 
 #pragma once
 
-static const constexpr int SFTP_BUF_SIZE = 4*1024;
 
 #include<ssh_util.hpp>
 
 #include<gtk/gtk.h>
 #include<ssh_util.hpp>
 #include<string>
+
+static const constexpr int SFTP_BUF_SIZE = 4*1024;
+static const constexpr uint64_t SFTP_UPLOAD_CHUNK_SIZE = 1024;
 
 struct SftpWindow {
     GtkBuilder *builder;
@@ -38,7 +40,7 @@ struct SftpWindow {
     SftpFile remote_file;
     int async_request;
     std::string dirname;
-    GFileInputStream *upload_file;
+    GMappedFile *upload_file;
     GFileOutputStream *download_file;
     char buf[SFTP_BUF_SIZE];
     bool downloading;
