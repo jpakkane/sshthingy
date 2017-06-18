@@ -10,3 +10,5 @@ executable('sshprog', 'main.cpp', 'sftp.cpp', 'forwards.cpp', 'ssh_util.cpp', 'u
 
 install_data('sshthingy.desktop',
   install_dir : join_paths(get_option('datadir'), 'applications'))
+  install_data('sshprog.png',
+    install_dir : join_paths(get_option('datadir'), 'icons/hicolor/48x48/apps'))
