@@ -5,4 +5,8 @@ ssh_dep = dependency('libssh')
 vte_dep = dependency('vte-2.91')
 
 executable('sshprog', 'main.cpp', 'sftp.cpp', 'forwards.cpp', 'ssh_util.cpp', 'util.cpp',
-  dependencies : [vte_dep, ssh_dep])
+  dependencies : [vte_dep, ssh_dep],
+  install : true)
+
+install_data('sshthingy.desktop',
+  install_dir : join_paths(get_option('datadir'), 'applications'))

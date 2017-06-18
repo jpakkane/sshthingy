@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Encoding=UTF-8
+Name=Unnamed SSH Client
+Comment=A graphical SSH client
+Exec=sshprog
+Icon=sshprog.png
+Terminal=false
