@@ -15,7 +15,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include<glades.hpp>
 #include<sftp.hpp>
+
+
 #include<fcntl.h>
 #include<util.hpp>
 #include<glib/gstdio.h>
@@ -265,7 +268,7 @@ void open_sftp(SftpWindow &sftp_win) {
 
 void build_sftp_win(SftpWindow &sftp_win) {
     sftp_win.dirname = ".";
-    sftp_win.builder = gtk_builder_new_from_file(data_file_name("sftpwindow.glade").c_str());
+    sftp_win.builder = gtk_builder_new_from_string((const gchar*)sftpwindow, sizeof(sftpwindow));
     sftp_win.sftp_window = GTK_WINDOW(gtk_builder_get_object(sftp_win.builder, "sftp_window"));
     sftp_win.file_view = GTK_TREE_VIEW(gtk_builder_get_object(sftp_win.builder, "fileview"));
     sftp_win.file_list = gtk_list_store_new(N_COLUMNS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_UINT64);

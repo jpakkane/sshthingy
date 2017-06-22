@@ -15,10 +15,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include<glades.hpp>
 #include<ssh_util.hpp>
 #include<sftp.hpp>
 #include<forwards.hpp>
 #include<util.hpp>
+
 #include<vte/vte.h>
 #include<gtk/gtk.h>
 
@@ -137,7 +139,7 @@ void connect_cancelled(GtkMenuItem *, gpointer data) {
 
 void launch_connection_dialog(GtkMenuItem *, gpointer data) {
     App &a = *reinterpret_cast<App*>(data);
-    a.connectionBuilder = gtk_builder_new_from_file(data_file_name("connectiondialog.glade").c_str());
+    a.connectionBuilder = gtk_builder_new_from_string((const gchar*)connectiondialog, sizeof(connectiondialog));
     auto connectionWindow = GTK_WIDGET(gtk_builder_get_object(a.connectionBuilder, "connection_window"));
     gtk_entry_set_text(GTK_ENTRY(gtk_builder_get_object(a.connectionBuilder, "username_entry")), g_get_user_name());
     g_signal_connect(gtk_builder_get_object(a.connectionBuilder, "connect_button"), "clicked", G_CALLBACK(open_connection), &a);

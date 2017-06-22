@@ -15,6 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include<glades.hpp>
 #include<forwards.hpp>
 #include<ssh_util.hpp>
 #include<util.hpp>
@@ -168,8 +169,8 @@ void close_new_fw_window(GtkMenuItem*, gpointer data) {
 }
 
 void build_port_gui(PortForwardings &pf) {
-    GtkBuilder *portBuilder = gtk_builder_new_from_file(data_file_name("forwardings.glade").c_str());
-    GtkBuilder *newPortBuilder = gtk_builder_new_from_file(data_file_name("createforwarding.glade").c_str());
+    GtkBuilder *portBuilder = gtk_builder_new_from_string((const gchar*)forwardings, sizeof(forwardings));
+    GtkBuilder *newPortBuilder = gtk_builder_new_from_string((const gchar*)createforwarding, sizeof(createforwarding));
 
     pf.forwardingBuilder = portBuilder;
     pf.newBuilder = newPortBuilder;
